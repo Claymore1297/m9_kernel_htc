@@ -306,6 +306,7 @@ static ssize_t inst_info_read(struct file *file, char __user *buf,
 	write_str(&dbg_buf, "fps: %d\n", inst->prop.fps);
 	write_str(&dbg_buf, "state: %d\n", inst->state);
 	write_str(&dbg_buf, "secure: %d\n", !!(inst->flags & VIDC_SECURE));
+	write_str(&dbg_buf, "Calling Process id: %d, name: %s\n", inst->call_pid, inst->process_name);
 	write_str(&dbg_buf, "-----------Formats-------------\n");
 	for (i = 0; i < MAX_PORT_NUM; i++) {
 		write_str(&dbg_buf, "capability: %s\n", i == OUTPUT_PORT ?

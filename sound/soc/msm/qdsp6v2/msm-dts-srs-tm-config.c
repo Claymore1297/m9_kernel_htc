@@ -165,7 +165,7 @@ static int msm_dts_srs_trumedia_control_mi2s_set(struct snd_kcontrol *kcontrol,
 
 	pr_debug("SRS control MI2S called\n");
 	msm_pcm_routing_acquire_lock();
-	port_id = AFE_PORT_ID_PRIMARY_MI2S_RX;
+	port_id = AFE_PORT_ID_QUATERNARY_MI2S_RX; // HTC_AUD
 	ret = msm_dts_srs_trumedia_control_set_(port_id, kcontrol, ucontrol);
 	msm_pcm_routing_release_lock();
 	return ret;

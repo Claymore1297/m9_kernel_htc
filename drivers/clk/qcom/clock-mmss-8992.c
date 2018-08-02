@@ -2008,7 +2008,7 @@ static int mmss_dbg_set_mux_sel(struct mux_clk *clk, int sel)
 
 	spin_lock_irqsave(&local_clock_reg_lock, flags);
 
-	
+	/* Set debug mux clock index */
 	regval = BVAL(11, 0, sel);
 	writel_relaxed(regval, MMSS_REG_BASE(MMSS_DEBUG_CLK_CTL));
 
@@ -2028,7 +2028,7 @@ static int mmss_dbg_mux_enable(struct mux_clk *clk)
 
 	regval = readl_relaxed(MMSS_REG_BASE(MMSS_DEBUG_CLK_CTL));
 	writel_relaxed(regval | BIT(16), MMSS_REG_BASE(MMSS_DEBUG_CLK_CTL));
-	
+	/* Make sure the register write is complete */
 	mb();
 
 	return 0;
@@ -2041,7 +2041,7 @@ static void mmss_dbg_mux_disable(struct mux_clk *clk)
 	regval = readl_relaxed(MMSS_REG_BASE(MMSS_DEBUG_CLK_CTL));
 	writel_relaxed(regval & ~BIT(16),
 		       MMSS_REG_BASE(MMSS_DEBUG_CLK_CTL));
-	
+	/* Make sure the register write is complete */
 	mb();
 }
 

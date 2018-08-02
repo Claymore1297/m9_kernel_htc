@@ -51,6 +51,7 @@
 #include <soc/qcom/htc_util.h>
 #include <linux/seq_file.h>
 #include <linux/qpnp/pin.h>
+/* #include <mach/devices_dtb.h> Not implemented yet*/
 #include <soc/qcom/rpm_stats.h>
 #ifdef CONFIG_PINCTRL_MSM_TLMM_V3
 #include <mach/gpio.h>
@@ -301,7 +302,7 @@ static bool msm_pm_pc_hotplug(void)
 		SCM_CMD_CORE_HOTPLUGGED | (flag & SCM_FLUSH_FLAG_MASK));
 	}
 
-	
+	/* Should not return here */
 	msm_pc_inc_debug_count(cpu, MSM_PC_FALLTHRU_COUNTER);
 	return 0;
 }
@@ -554,14 +555,14 @@ static bool msm_pm_power_collapse_standalone(
 	}
 	if (cpu_online(cpu)) {
 		if ((!from_idle) && (MSM_PM_DEBUG_RPM_STAT & msm_pm_debug_mask)){
-			msm_rpm_dump_stat();
+			msm_rpm_dump_stat(false);
 		}
 	}
 #endif
 
 	avsdscr = avs_get_avsdscr();
 	avscsr = avs_get_avscsr();
-	avs_set_avscsr(0); 
+	avs_set_avscsr(0); /* Disable AVS */
 
 #ifdef CONFIG_HTC_POWER_DEBUG
 	if ((!from_idle) && (MSM_PM_DEBUG_CLOCK & msm_pm_debug_mask))
@@ -576,7 +577,7 @@ static bool msm_pm_power_collapse_standalone(
 #ifdef CONFIG_HTC_POWER_DEBUG
 	if (cpu_online(cpu)) {
 		if ((!from_idle) && (MSM_PM_DEBUG_RPM_STAT & msm_pm_debug_mask))
-			msm_rpm_dump_stat();
+			msm_rpm_dump_stat(false);
 	}
 #endif
 	avs_set_avsdscr(avsdscr);
@@ -633,7 +634,7 @@ static bool msm_pm_power_collapse(bool from_idle)
 #ifdef CONFIG_HTC_POWER_DEBUG
 	if (cpu_online(cpu)) {
 		if ((!from_idle) && (MSM_PM_DEBUG_RPM_STAT & msm_pm_debug_mask)){
-			msm_rpm_dump_stat();
+			msm_rpm_dump_stat(false);
 		}
 	}
 #endif
@@ -641,13 +642,17 @@ static bool msm_pm_power_collapse(bool from_idle)
 	if (MSM_PM_DEBUG_POWER_COLLAPSE & msm_pm_debug_mask)
 		pr_info("CPU%u: %s: pre power down\n", cpu, __func__);
 
+	/* This spews a lot of messages when a core is hotplugged. This
+	 * information is most useful from last core going down during
+	 * power collapse
+	 */
 	if ((!from_idle && cpu_online(cpu))
 			|| (MSM_PM_DEBUG_IDLE_CLK & msm_pm_debug_mask))
 		clock_debug_print_enabled();
 
 	avsdscr = avs_get_avsdscr();
 	avscsr = avs_get_avscsr();
-	avs_set_avscsr(0); 
+	avs_set_avscsr(0); /* Disable AVS */
 
 	if (cpu_online(cpu) && !msm_no_ramp_down_pc)
 		saved_acpuclk_rate = ramp_down_last_cpu(cpu);
@@ -657,7 +662,7 @@ static bool msm_pm_power_collapse(bool from_idle)
 	if (cpu_online(cpu)) {
 #ifdef CONFIG_HTC_POWER_DEBUG
 		if ((!from_idle) && (MSM_PM_DEBUG_RPM_STAT & msm_pm_debug_mask))
-			msm_rpm_dump_stat();
+			msm_rpm_dump_stat(false);
 		if ((!from_idle) && (MSM_PM_DEBUG_CLOCK & msm_pm_debug_mask))
 #else
 		if (MSM_PM_DEBUG_CLOCK & msm_pm_debug_mask)
@@ -681,6 +686,9 @@ static bool msm_pm_power_collapse(bool from_idle)
 		pr_info("CPU%u: %s: return\n", cpu, __func__);
 	return collapsed;
 }
+/******************************************************************************
+ * External Idle/Suspend Functions
+ *****************************************************************************/
 
 void arch_idle(void)
 {
@@ -695,6 +703,18 @@ static bool (*execute[MSM_PM_SLEEP_MODE_NR])(bool idle) = {
 	[MSM_PM_SLEEP_MODE_POWER_COLLAPSE] = msm_pm_power_collapse,
 };
 
+/**
+ * msm_cpu_pm_enter_sleep(): Enter a low power mode on current cpu
+ *
+ * @mode - sleep mode to enter
+ * @from_idle - bool to indicate that the mode is exercised during idle/suspend
+ *
+ * returns none
+ *
+ * The code should be with interrupts disabled and on the core on which the
+ * low power is to be executed.
+ *
+ */
 bool msm_cpu_pm_enter_sleep(enum msm_pm_sleep_mode mode, bool from_idle)
 {
 	int64_t time;
@@ -719,15 +739,26 @@ bool msm_cpu_pm_enter_sleep(enum msm_pm_sleep_mode mode, bool from_idle)
 
 #ifdef CONFIG_HTC_POWER_DEBUG
         if(from_idle){
-                
+                //if((get_kernel_flag() & KERNEL_FLAG_PM_MONITOR) || !(get_kernel_flag() & KERNEL_FLAG_TE
                         htc_idle_stat_add(mode, (u32)time);
-                
+                //}
         }
 #endif
 
 	return exit_stat;
 }
 
+/**
+ * msm_pm_wait_cpu_shutdown() - Wait for a core to be power collapsed during
+ *				hotplug
+ *
+ * @ cpu - cpu to wait on.
+ *
+ * Blocking function call that waits on the core to be power collapsed. This
+ * function is called from platform_cpu_die to ensure that a core is power
+ * collapsed before sending the CPU_DEAD notification so the drivers could
+ * remove the resource votes for this CPU(regulator and clock)
+ */
 int msm_pm_wait_cpu_shutdown(unsigned int cpu)
 {
 	int timeout = 0;
@@ -737,12 +768,20 @@ int msm_pm_wait_cpu_shutdown(unsigned int cpu)
 	if (!msm_pm_slp_sts[cpu].base_addr)
 		return 0;
 	while (1) {
+		/*
+		 * Check for the SPM of the core being hotplugged to set
+		 * its sleep state.The SPM sleep state indicates that the
+		 * core has been power collapsed.
+		 */
 		int acc_sts = __raw_readl(msm_pm_slp_sts[cpu].base_addr);
 
 		if (acc_sts & msm_pm_slp_sts[cpu].mask)
 			return 0;
 
 		udelay(100);
+		/*
+		 * Dump spm registers for debugging
+		 */
 		if (++timeout == 20) {
 			msm_spm_dump_regs(cpu);
 			__WARN_printf("CPU%u didn't collapse in 2ms, sleep status: 0x%x\n",
@@ -755,7 +794,16 @@ int msm_pm_wait_cpu_shutdown(unsigned int cpu)
 
 static void msm_pm_ack_retention_disable(void *data)
 {
+	/*
+	 * This is a NULL function to ensure that the core has woken up
+	 * and is safe to disable retention.
+	 */
 }
+/**
+ * msm_pm_enable_retention() - Disable/Enable retention on all cores
+ * @enable: Enable/Disable retention
+ *
+ */
 void msm_pm_enable_retention(bool enable)
 {
 	if (enable == msm_pm_ldo_retention_enabled)
@@ -763,6 +811,12 @@ void msm_pm_enable_retention(bool enable)
 
 	msm_pm_ldo_retention_enabled = enable;
 
+	/*
+	 * If retention is being disabled, wakeup all online core to ensure
+	 * that it isn't executing retention. Offlined cores need not be woken
+	 * up as they enter the deepest sleep mode, namely RPM assited power
+	 * collapse
+	 */
 	if (!enable) {
 		preempt_disable();
 		smp_call_function_many(&retention_cpus,
@@ -773,6 +827,11 @@ void msm_pm_enable_retention(bool enable)
 }
 EXPORT_SYMBOL(msm_pm_enable_retention);
 
+/**
+ * msm_pm_retention_enabled() - Check if retention is enabled
+ *
+ * returns true if retention is enabled
+ */
 bool msm_pm_retention_enabled(void)
 {
 	return msm_pm_ldo_retention_enabled;
@@ -1032,6 +1091,10 @@ static int msm_pm_htc_footprint_init(void)
 	pr_info("%s: msm_pm_boot_vector 0x%p", __func__, (void *)&msm_pm_boot_vector);
 	store_pm_boot_vector_addr((u64)&msm_pm_boot_vector);
 
+	/* CPU0 is turned on before running kernel,
+	 * it would not go through msm_pm_spm_power_collapse.
+	 * We need to initiate CPU0 low power footprint here.
+	 */
 	clean_reset_vector_debug_info(0);
 	init_cpu_foot_print(0, false, true);
 	set_cpu_foot_print(0, 0xb);

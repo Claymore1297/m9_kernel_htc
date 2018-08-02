@@ -27,6 +27,9 @@ int msm_hdmi_register_mhl(struct platform_device *pdev,
 			  struct msm_hdmi_mhl_ops *ops, void *data);
 
 #ifdef CONFIG_HTC_MHL_DETECTION_8620
+/***********************************
+ Direction: sii8620 drvier -> hdmi driver
+***********************************/
 struct t_mhl_disconnect_notifier{
         struct list_head mhl_notifier_link;
         const char *name;
@@ -36,4 +39,4 @@ int mhl_disconnect_register_notifier(struct t_mhl_disconnect_notifier *);
 static LIST_HEAD(g_lh_mhl_disconnect_notifier_list);
 #endif
 
-#endif 
+#endif /* __MDSS_HDMI_MHL_H__ */

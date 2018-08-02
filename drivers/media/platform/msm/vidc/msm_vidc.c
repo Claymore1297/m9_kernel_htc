@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -80,6 +80,7 @@ int msm_vidc_poll(void *instance, struct file *filp,
 }
 EXPORT_SYMBOL(msm_vidc_poll);
 
+/* Kernel client alternative for msm_vidc_poll */
 int msm_vidc_wait(void *instance)
 {
 	struct msm_vidc_inst *inst = instance;
@@ -258,9 +259,17 @@ struct buffer_info *get_registered_buf(struct msm_vidc_inst *inst,
 	list_for_each_entry(temp, &inst->registeredbufs.list, list) {
 		for (i = 0; (i < temp->num_planes)
 			&& (i < VIDEO_MAX_PLANES); i++) {
+			int8_t ion_hndl_matches =
+				msm_smem_compare_buffers(inst->mem_client, fd,
+				temp->handle[i]->smem_priv);
+			/* HTC_VIDEO_START : Add error handling for check Ion handle */
+			if (ion_hndl_matches < 0) {
+				dprintk(VIDC_ERR, "Ion handle for fd %d doesn't exist!!\n", fd);
+				return NULL;
+			}
+			/* HTC_VIDEO_END */
 			if (temp &&
-				((fd == temp->fd[i]) ||
-				(device_addr == temp->device_addr[i])) &&
+				(device_addr == temp->device_addr[i] || ion_hndl_matches) &&
 				(CONTAINS(temp->buff_off[i],
 				temp->size[i], buff_off)
 				|| CONTAINS(buff_off,
@@ -336,7 +345,7 @@ struct buffer_info *device_to_uvaddr(struct msm_vidc_list *buf_list,
 
 	mutex_lock(&buf_list->lock);
 	list_for_each_entry(temp, &buf_list->list, list) {
-		
+		/* HTC_START: Fix NULL pointer dereferenced issue */
 		if (temp) {
 			for (i = 0; (i < temp->num_planes)
 				&& (i < VIDEO_MAX_PLANES); i++) {
@@ -352,7 +361,7 @@ struct buffer_info *device_to_uvaddr(struct msm_vidc_list *buf_list,
 			dprintk(VIDC_ERR,
 				"Get NULL buffer_info!\n");
 		}
-		
+		/* HTC_END */
 		if (found)
 			break;
 	}
@@ -430,12 +439,14 @@ static inline enum hal_buffer get_hal_buffer_type(
 	if (inst->session_type == MSM_VIDC_DECODER) {
 		if (b->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 			return HAL_BUFFER_INPUT;
-		else 
+		else /* V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE */
 			return HAL_BUFFER_OUTPUT;
 	} else {
+		/* FIXME in the future.  See comment in msm_comm_get_\
+		 * domain_partition. Same problem here. */
 		if (b->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 			return HAL_BUFFER_OUTPUT;
-		else 
+		else /* V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE */
 			return HAL_BUFFER_INPUT;
 	}
 	return -EINVAL;
@@ -471,6 +482,9 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 	int plane = 0;
 	int i = 0, rc = 0;
 	struct msm_smem *same_fd_handle = NULL;
+	bool check_same_fd_handle = !is_dynamic_output_buffer_mode(b, inst) &&
+		!( inst->session_type == MSM_VIDC_ENCODER &&
+			b->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
 
 	if (!b || !inst) {
 		dprintk(VIDC_ERR, "%s: invalid input\n", __func__);
@@ -509,6 +523,14 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 
 		if (temp && is_dynamic_output_buffer_mode(b, inst) &&
 			(i == 0)) {
+			/*
+			* Buffer is already present in registered list
+			* increment ref_count, populate new values of v4l2
+			* buffer in existing buffer_info struct.
+			*
+			* We will use the saved buffer info and queue it when
+			* we receive RELEASE_BUFFER_REFERENCE EVENT from f/w.
+			*/
 			dprintk(VIDC_DBG, "[MAP] Buffer already prepared\n");
 			list_for_each_entry(iterator,
 				&inst->registeredbufs.list, list) {
@@ -526,7 +548,8 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 		if (rc < 0)
 			goto exit;
 
-		if (!is_dynamic_output_buffer_mode(b, inst))
+		//if (!is_dynamic_output_buffer_mode(b, inst))
+		if (check_same_fd_handle)
 			same_fd_handle = get_same_fd_buffer(
 						&inst->registeredbufs,
 						b->m.planes[i].reserved[0]);
@@ -540,13 +563,21 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 			binfo->handle[i] = same_fd_handle;
 		} else {
 			if (inst->map_output_buffer) {
+                               /* HTC_START: ION debug mechanism enhancement
+                                * The alphabet after Alloc_/Import_/Free_ represents for different meaning.
+                                * I: Input buffer
+                                * O: Output buffer
+                                * S: Scratch buffer
+                                * V: Venus hfi buffer
+                                * U: Unknown buffer
+                                */
 #if 1
                                 dprintk(VIDC_WARN,
                                         "[Vidc_Mem][%p] Import_%s: UsrAddr(%lx) FD(%d)\n",
                                         inst, ((get_hal_buffer_type(inst, b) == HAL_BUFFER_INPUT)? "I":"O"),
                                         binfo->uvaddr[i], b->m.planes[i].reserved[0]);
 #endif
-                                
+                                /* HTC_END */
 				binfo->handle[i] =
 					map_buffer(inst, &b->m.planes[i],
 						get_hal_buffer_type(inst, b));
@@ -565,7 +596,7 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 					b->m.planes[i].m.userptr;
 			}
 		}
-		
+		/* We maintain one ref count for all planes*/
 		if ((i == 0) && is_dynamic_output_buffer_mode(b, inst)) {
 			rc = buf_ref_get(inst, binfo);
 			if (rc < 0)
@@ -603,6 +634,10 @@ int unmap_and_deregister_buf(struct msm_vidc_inst *inst,
 	WARN(!mutex_is_locked(&inst->registeredbufs.lock),
 		"Regsitered buf lock is not acqruired for %s", __func__);
 
+	/*
+	* Make sure the buffer to be unmapped and deleted
+	* from the registered list is present in the list.
+	*/
 	list_for_each_entry(temp, &inst->registeredbufs.list, list) {
 		if (temp == binfo) {
 			found = true;
@@ -610,6 +645,12 @@ int unmap_and_deregister_buf(struct msm_vidc_inst *inst,
 		}
 	}
 
+	/*
+	* Free the buffer info only if
+	* - buffer info has not been deleted from registered list
+	* - vidc client has called dqbuf on the buffer
+	* - no references are held on the buffer
+	*/
 	if (!found || !temp || !temp->pending_deletion || !temp->dequeued)
 		goto exit;
 
@@ -619,6 +660,15 @@ int unmap_and_deregister_buf(struct msm_vidc_inst *inst,
 			__func__, temp, i, temp->handle[i],
 			&temp->device_addr[i], temp->fd[i],
 			temp->buff_off[i], temp->mapped[i]);
+		/*
+		* Unmap the handle only if the buffer has been mapped and no
+		* other buffer has a reference to this buffer.
+		* In case of buffers with same fd, we will map the buffer only
+		* once and subsequent buffers will refer to the mapped buffer's
+		* device address.
+		* For buffers which share the same fd, do not unmap and keep
+		* the buffer info in registered list.
+		*/
 		if (temp->handle[i] && temp->mapped[i] &&
 			!temp->same_fd_ref[i]) {
 			msm_comm_smem_free(inst,
@@ -711,19 +761,24 @@ int output_buffer_cache_invalidate(struct msm_vidc_inst *inst,
 	return 0;
 }
 
+static bool valid_v4l2_buffer(struct v4l2_buffer *b,
+		struct msm_vidc_inst *inst) {
+	enum vidc_ports port =
+		!V4L2_TYPE_IS_MULTIPLANAR(b->type) ? MAX_PORT_NUM :
+		b->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE ? CAPTURE_PORT :
+		b->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE ? OUTPUT_PORT :
+								MAX_PORT_NUM;
+
+	return port != MAX_PORT_NUM &&
+		inst->fmts[port]->num_planes == b->length;
+}
+
 int msm_vidc_prepare_buf(void *instance, struct v4l2_buffer *b)
 {
 	struct msm_vidc_inst *inst = instance;
 
-	if (!inst || !b)
+	if (!inst || !b || !valid_v4l2_buffer(b, inst))
 		return -EINVAL;
-
-	if (!V4L2_TYPE_IS_MULTIPLANAR(b->type) || !b->length ||
-		(b->length > VIDEO_MAX_PLANES)) {
-		dprintk(VIDC_ERR, "%s: wrong input params\n",
-				__func__);
-		return -EINVAL;
-	}
 
 	if (is_dynamic_output_buffer_mode(b, inst)) {
 		dprintk(VIDC_ERR, "%s: not supported in dynamic buffer mode\n",
@@ -731,7 +786,7 @@ int msm_vidc_prepare_buf(void *instance, struct v4l2_buffer *b)
 		return -EINVAL;
 	}
 
-	
+	/* Map the buffer only for non-kernel clients*/
 	if (b->m.planes[0].reserved[0]) {
 		inst->map_output_buffer = true;
 		if (map_and_register_buf(inst, b))
@@ -766,6 +821,11 @@ int msm_vidc_release_buffers(void *instance, int buffer_type)
 		}
 	}
 
+	/*
+	* In dynamic buffer mode, driver needs to release resources,
+	* but not call release buffers on firmware, as the buffers
+	* were never registered with firmware.
+	*/
 	if ((buffer_type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) &&
 		(inst->buffer_mode_set[CAPTURE_PORT] ==
 				HAL_BUFFER_MODE_DYNAMIC)) {
@@ -869,15 +929,8 @@ int msm_vidc_qbuf(void *instance, struct v4l2_buffer *b)
 	int rc = 0;
 	int i;
 
-	if (!inst || !b)
+	if (!inst || !b || !valid_v4l2_buffer(b, inst))
 		return -EINVAL;
-
-	if (!V4L2_TYPE_IS_MULTIPLANAR(b->type) || !b->length ||
-		(b->length > VIDEO_MAX_PLANES)) {
-		dprintk(VIDC_ERR, "%s: wrong input params\n",
-				__func__);
-		return -EINVAL;
-	}
 
 	if (is_dynamic_output_buffer_mode(b, inst)) {
 		if (b->m.planes[0].reserved[0])
@@ -954,15 +1007,8 @@ int msm_vidc_dqbuf(void *instance, struct v4l2_buffer *b)
 	struct buffer_info *buffer_info = NULL;
 	int i = 0, rc = 0;
 
-	if (!inst || !b)
+	if (!inst || !b || !valid_v4l2_buffer(b, inst))
 		return -EINVAL;
-
-	if (!V4L2_TYPE_IS_MULTIPLANAR(b->type) || !b->length ||
-		(b->length > VIDEO_MAX_PLANES)) {
-		dprintk(VIDC_ERR, "%s: wrong input params\n",
-				__func__);
-		return -EINVAL;
-	}
 
 	if (inst->session_type == MSM_VIDC_DECODER)
 		rc = msm_vdec_dqbuf(instance, b);
@@ -1240,7 +1286,7 @@ static bool msm_vidc_check_for_inst_overload(struct msm_vidc_core *core)
 		instance_count++;
 	mutex_unlock(&core->lock);
 
-	
+	/* Instance count includes just opened instance as well. */
 
 	if (instance_count > core->max_supported_instances)
 		overload = true;
@@ -1305,9 +1351,12 @@ void *msm_vidc_open(int core_id, int session_type)
 		goto fail_mem_client;
 	}
 
+        /* HTC_START: ION debug mechanism enhancement
+         * Add the additional video instance inside struct smem_client
+         */
         smem_client = inst->mem_client;
         smem_client->inst = inst;
-        
+        /* HTC_END */
 
 	if (session_type == MSM_VIDC_DECODER) {
 		msm_vdec_inst_init(inst);

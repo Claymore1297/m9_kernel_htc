@@ -81,9 +81,9 @@ struct mdss_perf_tune {
 #define MDSS_IRQ_REQ		0
 
 struct mdss_intr {
-	
+	/* requested intr */
 	u32 req;
-	
+	/* currently enabled intr */
 	u32 curr;
 	int state;
 	spinlock_t lock;
@@ -146,20 +146,20 @@ struct mdss_data_type {
 	struct dss_io_data vbif_nrt_io;
 	char __iomem *mdp_base;
 
-	
+	/* Used to store if vote to enable svs plus has been sent or not */
 	u32 svs_plus_vote;
-	
+	/* Min rate from where SVS plus vote is needed */
 	u32 svs_plus_min;
-	
+	/* Max rate till where SVS plus vote is needed */
 	u32 svs_plus_max;
 
 	struct mutex reg_lock;
 
-	
+	/* bitmap to track pipes that have BWC enabled */
 	DECLARE_BITMAP(bwc_enable_map, MAX_DRV_SUP_PIPES);
-	
+	/* bitmap to track hw workarounds */
 	DECLARE_BITMAP(mdss_quirk_map, MDSS_QUIRK_MAX);
-	
+	/* bitmap to track total mmbs in use */
 	DECLARE_BITMAP(mmb_alloc_map, MAX_DRV_SUP_MMB_BLKS);
 
 	u32 has_bwc;
@@ -290,7 +290,7 @@ struct mdss_data_type {
 	bool mixer_switched;
 	struct mdss_panel_cfg pan_cfg;
 	struct mdss_prefill_data prefill_data;
-	u32 min_prefill_lines; 
+	u32 min_prefill_lines; /* this changes within different chipsets */
 	u32 props;
 
 	int handoff_pending;
@@ -395,4 +395,4 @@ static inline bool mdss_has_quirk(struct mdss_data_type *mdata,
 #define MDSS_REG_READ(mdata, offset) \
 		dss_reg_r(&mdata->mdss_io, offset, 0)
 
-#endif 
+#endif /* MDSS_H */

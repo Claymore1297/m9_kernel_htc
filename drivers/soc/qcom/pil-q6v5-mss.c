@@ -66,7 +66,7 @@ static void dump_snoc_process(struct work_struct *work)
 	struct scm_desc desc = {0};
 
 	desc.arginfo = SCM_ARGS(2);
-	desc.args[0] = cmd.config = 0xA;	 
+	desc.args[0] = cmd.config = 0xA;	 //0xA is an magic number to notify TZ to dump SNOC syndrome register
 	desc.args[1] = cmd.spare = 0;
 
 	if (!is_scm_armv8())
@@ -108,13 +108,6 @@ static void log_modem_sfr(void)
 	pr_err("modem subsystem failure reason: %s.\n", reason);
 
 	if(!strncmp(reason, "qmi_sap_xport_qmux.c:", 21))
-	{
-		pr_err("RIL debug: trigger kernel panic to get full ramdump.\n");
-		panic("Panic triggered by RIL debugging");
-		skip_ssr_on_fatal =1;
-	}
-
-	if(!strncmp(reason, "mcpm_resrc_modem_clk.c:", strlen("mcpm_resrc_modem_clk.c:")))
 	{
 		pr_err("RIL debug: trigger kernel panic to get full ramdump.\n");
 		panic("Panic triggered by RIL debugging");
@@ -166,7 +159,7 @@ static irqreturn_t modem_err_fatal_intr_handler(int irq, void *dev_id)
 {
 	struct modem_data *drv = subsys_to_drv(dev_id);
 
-	
+	/* Ignore if we're the one that set the force stop GPIO */
 	if (drv->crash_shutdown)
 		return IRQ_HANDLED;
 
@@ -227,6 +220,11 @@ static int modem_powerup(const struct subsys_desc *subsys)
 
 	if (subsys->is_not_loadable)
 		return 0;
+	/*
+	 * At this time, the modem is shutdown. Therefore this function cannot
+	 * run concurrently with the watchdog bite error handler, making it safe
+	 * to unset the flag below.
+	 */
 	INIT_COMPLETION(drv->stop_ack);
 	drv->subsys_desc.ramdump_disable = 0;
 	drv->ignore_errors = false;
@@ -323,6 +321,19 @@ static int pil_subsys_init(struct modem_data *drv,
 	}
 
 #if defined(CONFIG_HTC_FEATURES_SSR)
+	/*modem restart condition and ramdump rule would follow below
+	1. Modem restart default enable
+	- flag [6] 0,   [8] 0 -> enable restart, no ramdump
+	- flag [6] 800, [8] 0 -> reboot
+	- flag [6] 800, [8] 8 -> disable restart, go DL mode
+	- flag [6] 0,   [8] 8 -> enable restart, online ramdump
+	2. Modem restart default disable
+	- flag [6] 0,   [8] 0 -> reboot
+	- flag [6] 800, [8] 0 -> enable restart, no ramdump
+	- flag [6] 800, [8] 8 -> enable restart, online ramdump
+	- flag [6] 0,   [8] 8 -> disable restart, go DL mode
+	3. Always disable Modem SSR if boot_mode != normal
+	*/
 #if defined(CONFIG_HTC_FEATURES_SSR_MODEM_ENABLE)
 	if (get_kernel_flag() & (KERNEL_FLAG_ENABLE_SSR_MODEM)) {
 		pr_info("%s: CONFIG_HTC_FEATURES_SSR_MODEM_ENABLE, KERNEL_FLAG_ENABLE_SSR_MODEM, RESET_SOC.\n", __func__);
@@ -464,7 +475,7 @@ static int pil_mss_loadable_init(struct modem_data *drv,
 	if (IS_ERR(q6->rom_clk))
 		return PTR_ERR(q6->rom_clk);
 
-	
+	/* Optional. */
 	if (of_property_match_string(pdev->dev.of_node,
 			"qcom,active-clock-names", "gpll0_mss_clk") >= 0)
 		q6->gpll0_mss_clk = devm_clk_get(&pdev->dev, "gpll0_mss_clk");
@@ -494,7 +505,7 @@ static int pil_mss_driver_probe(struct platform_device *pdev)
 			return ret;
 	}
 
-	
+	/* Create workqueue for SNOC dump */
 	dump_snoc_wq = create_singlethread_workqueue("dump_snoc_work");
 
 	init_completion(&drv->stop_ack);

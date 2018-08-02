@@ -12,6 +12,19 @@
  *
  */
 
+/*
+ * Qualcomm technologies inc, DMA API for BAM (Bus Access Manager).
+ * This DMA driver uses sps-BAM API to access the HW, thus it is effectively a
+ * DMA engine wrapper of the sps-BAM API.
+ *
+ * Client channel configuration example:
+ * struct dma_slave_config config {
+ *    .direction = DMA_MEM_TO_DEV;
+ * };
+ *
+ * chan = dma_request_slave_channel(client_dev, "rx");
+ * dmaengine_slave_config(chan, &config);
+ */
 
 #include <linux/kernel.h>
 #include <linux/io.h>
@@ -34,6 +47,13 @@
 #define QBAM_MAX_DESCRIPTORS	(0x100)
 #define QBAM_MAX_CHANNELS	(32)
 
+/*
+ * qbam_async_tx_descriptor - dma descriptor plus a list of xfer_bufs
+ *
+ * @sgl scatterlist of transfer buffers
+ * @sg_len size of that list
+ * @flags dma xfer flags
+ */
 struct qbam_async_tx_descriptor {
 	struct dma_async_tx_descriptor	dma_desc;
 	struct scatterlist		*sgl;
@@ -45,6 +65,19 @@ struct qbam_async_tx_descriptor {
 	container_of(dma_async_desc, struct qbam_async_tx_descriptor, dma_desc)
 
 struct qbam_channel;
+/*
+ * qbam_device - top level device of current driver
+ * @handle bam sps handle.
+ * @regs bam register space virtual base address.
+ * @mem_resource bam register space resource.
+ * @deregister_required if bam is registered by this driver it need to be
+ *   unregistered by this driver.
+ * @manage is bame managed locally or remotely,
+ * @summing_threshold event threshold.
+ * @irq bam interrupt line.
+ * @channels has the same channels as qbam_dev->dma_dev.channels but
+ *   supports fast access by pipe index.
+ */
 struct qbam_device {
 	struct dma_device		dma_dev;
 	void __iomem			*regs;
@@ -57,6 +90,7 @@ struct qbam_device {
 	struct qbam_channel		*channels[QBAM_MAX_CHANNELS];
 };
 
+/* qbam_pipe: aggregate of bam pipe related entries of qbam_channel */
 struct qbam_pipe {
 	u32				index;
 	struct sps_pipe			*handle;
@@ -66,6 +100,13 @@ struct qbam_pipe {
 	u32				sps_register_event_flags;
 };
 
+/*
+ * qbam_channel - dma channel plus bam pipe info and current pending transfers
+ *
+ * @direction is a producer or consumer (MEM => DEV or DEV => MEM)
+ * @pending_desc next set of transfer to process
+ * @error last error that took place on the current pending_desc
+ */
 struct qbam_channel {
 	struct qbam_pipe		bam_pipe;
 
@@ -81,6 +122,7 @@ struct qbam_channel {
 			container_of(dma_chan, struct qbam_channel, chan)
 #define qbam_err(qbam_dev, fmt ...) dev_err(qbam_dev->dma_dev.dev, fmt)
 
+/*  qbam_disconnect_chan - disconnect a channel */
 static int qbam_disconnect_chan(struct qbam_channel *qbam_chan)
 {
 	struct qbam_device  *qbam_dev    = qbam_chan->qbam_dev;
@@ -88,6 +130,12 @@ static int qbam_disconnect_chan(struct qbam_channel *qbam_chan)
 	struct sps_connect   pipe_config_no_irq = {.options = SPS_O_POLL};
 	int ret;
 
+	/*
+	 * SW workaround:
+	 * When disconnecting BAM pipe a spurious interrupt sometimes appears.
+	 * To avoid that, we change the pipe setting from interrupt (default)
+	 * to polling (SPS_O_POLL) before diconnecting the pipe.
+	 */
 	ret = sps_set_config(pipe_handle, &pipe_config_no_irq);
 	if (ret)
 		qbam_err(qbam_dev,
@@ -102,6 +150,7 @@ static int qbam_disconnect_chan(struct qbam_channel *qbam_chan)
 	return ret;
 }
 
+/*  qbam_free_chan - disconnect channel and free its resources */
 static void qbam_free_chan(struct dma_chan *chan)
 {
 	struct qbam_channel *qbam_chan = DMA_TO_QBAM_CHAN(chan);
@@ -141,7 +190,7 @@ static struct dma_chan *qbam_dma_xlate(struct of_phandle_args *dma_spec,
 		return NULL;
 	}
 	qbam_chan = qbam_dev->channels[channel_index];
-	 
+	 /* return qbam_chan if exists, or create one */
 	if (qbam_chan) {
 		qbam_chan->chan.client_count = 1;
 		return &qbam_chan->chan;
@@ -155,7 +204,7 @@ static struct dma_chan *qbam_dma_xlate(struct of_phandle_args *dma_spec,
 		return NULL;
 	}
 
-	
+	/* allocate a channel */
 	qbam_chan = kzalloc(sizeof(*qbam_chan), GFP_KERNEL);
 	if (!qbam_chan) {
 		qbam_err(qbam_dev, "error kmalloc(size:%lu) faild\n",
@@ -163,7 +212,7 @@ static struct dma_chan *qbam_dma_xlate(struct of_phandle_args *dma_spec,
 		return NULL;
 	}
 
-	
+	/* allocate BAM resources for that channel */
 	qbam_chan->bam_pipe.handle = sps_alloc_endpoint();
 	if (!qbam_chan->bam_pipe.handle) {
 		qbam_err(qbam_dev, "error: sps_alloc_endpoint() return NULL\n");
@@ -171,11 +220,11 @@ static struct dma_chan *qbam_dma_xlate(struct of_phandle_args *dma_spec,
 		return NULL;
 	}
 
-	
+	/* init dma_chan */
 	qbam_chan->chan.device = &qbam_dev->dma_dev;
 	dma_cookie_init(&qbam_chan->chan);
 	qbam_chan->chan.client_count                 = 1;
-	
+	/* init qbam_chan */
 	qbam_chan->bam_pipe.index                    = channel_index;
 	qbam_chan->bam_pipe.num_descriptors          = num_descriptors;
 	qbam_chan->bam_pipe.sps_connect_flags        = dma_spec->args[2];
@@ -183,7 +232,7 @@ static struct dma_chan *qbam_dma_xlate(struct of_phandle_args *dma_spec,
 	qbam_chan->qbam_dev                          = qbam_dev;
 	mutex_init(&qbam_chan->lock);
 
-	
+	/* add to dma_device list of channels */
 	list_add(&qbam_chan->chan.device_node, &qbam_dev->dma_dev.channels);
 	qbam_dev->channels[channel_index] = qbam_chan;
 
@@ -220,11 +269,23 @@ static enum dma_status qbam_tx_status(struct dma_chan *chan,
 	return ret;
 }
 
+/*
+ * qbam_init_bam_handle - find or create bam handle.
+ *
+ * BAM device needs to be registerd for each BLSP once and only once. if it was
+ * registred, then we find the handle to the registerd bam and return it,
+ * otherwise we register it here.
+ * The module which registerd BAM is responsible for deregistering it.
+ */
 static int qbam_init_bam_handle(struct qbam_device *qbam_dev)
 {
 	int ret = 0;
 	struct sps_bam_props bam_props = {0};
 
+	/*
+	 * Check if BAM is already registred with SPS on the current
+	 * BLSP. If it isn't then go ahead and register it.
+	 */
 	ret = sps_phy2h(qbam_dev->mem_resource->start, &qbam_dev->handle);
 	if (qbam_dev->handle)
 		return 0;
@@ -328,6 +389,11 @@ need_disconnect:
 	return ret;
 }
 
+/*
+ * qbam_slave_cfg - configure and connect a BAM pipe
+ *
+ * @cfg only cares about cfg->direction
+ */
 static int qbam_slave_cfg(struct qbam_channel *qbam_chan,
 						struct dma_slave_config *cfg)
 {
@@ -369,7 +435,7 @@ static int qbam_slave_cfg(struct qbam_channel *qbam_chan,
 	pipe_cfg->options   =  qbam_chan->bam_pipe.sps_connect_flags;
 	pipe_cfg->desc.size = (qbam_chan->bam_pipe.num_descriptors + 1) *
 						 sizeof(struct sps_iovec);
-	
+	/* managed dma_alloc_coherent() */
 	pipe_cfg->desc.base = dmam_alloc_coherent(qbam_dev->dma_dev.dev,
 						  pipe_cfg->desc.size,
 						  &pipe_cfg->desc.phys_base,
@@ -407,6 +473,12 @@ static int qbam_flush_chan(struct qbam_channel *qbam_chan)
 	return ret;
 }
 
+/*
+ * qbam_control - DMA device control. entry point for channel configuration.
+ * @chan: dma channel
+ * @cmd: control cmd
+ * @arg: cmd argument
+ */
 static int qbam_control(struct dma_chan *chan, enum dma_ctrl_cmd cmd,
 							unsigned long arg)
 {
@@ -430,6 +502,7 @@ static int qbam_control(struct dma_chan *chan, enum dma_ctrl_cmd cmd,
 	return ret;
 }
 
+/* qbam_tx_submit - sets the descriptor as the next one to be executed */
 static dma_cookie_t qbam_tx_submit(struct dma_async_tx_descriptor *dma_desc)
 {
 	struct qbam_channel *qbam_chan = DMA_TO_QBAM_CHAN(dma_desc->chan);
@@ -443,6 +516,17 @@ static dma_cookie_t qbam_tx_submit(struct dma_async_tx_descriptor *dma_desc)
 	return ret;
 }
 
+/*
+ * qbam_prep_slave_sg - creates qbam_xfer_buf from a list of sg
+ *
+ * @chan: dma channel
+ * @sgl: scatter gather list
+ * @sg_len: length of sg
+ * @direction: DMA transfer direction
+ * @flags: DMA flags
+ * @context: transfer context (unused)
+ * @return the newly created descriptor or negative ERR_PTR() on error
+ */
 static struct dma_async_tx_descriptor *qbam_prep_slave_sg(struct dma_chan *chan,
 	struct scatterlist *sgl, unsigned int sg_len,
 	enum dma_transfer_direction direction, unsigned long flags,
@@ -467,6 +551,11 @@ static struct dma_async_tx_descriptor *qbam_prep_slave_sg(struct dma_chan *chan,
 	return &qbam_desc->dma_desc;
 }
 
+/*
+ * qbam_issue_pending - queue pending descriptor to BAM
+ *
+ * Iterate over the transfers of the pending descriptor and push them to bam
+ */
 static void qbam_issue_pending(struct dma_chan *chan)
 {
 	int i;
@@ -573,20 +662,20 @@ static int qbam_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	
+	/* read from DT and set sps_bam_props.manage */
 	managed_locally = of_property_read_bool(of_node, QBAM_OF_MANAGE_LOCAL);
 	qbam_dev->manage = managed_locally ? SPS_BAM_MGR_LOCAL :
 					     SPS_BAM_MGR_DEVICE_REMOTE;
 
-	
+	/* Init channels */
 	INIT_LIST_HEAD(&qbam_dev->dma_dev.channels);
 
-	
+	/* Set capabilities */
 	dma_cap_zero(qbam_dev->dma_dev.cap_mask);
 	dma_cap_set(DMA_SLAVE,		qbam_dev->dma_dev.cap_mask);
 	dma_cap_set(DMA_PRIVATE,	qbam_dev->dma_dev.cap_mask);
 
-	
+	/* Initialize dmaengine callback apis */
 	qbam_dev->dma_dev.device_alloc_chan_resources	= qbam_alloc_chan;
 	qbam_dev->dma_dev.device_free_chan_resources	= qbam_free_chan;
 	qbam_dev->dma_dev.device_prep_slave_sg		= qbam_prep_slave_sg;
@@ -594,7 +683,7 @@ static int qbam_probe(struct platform_device *pdev)
 	qbam_dev->dma_dev.device_issue_pending		= qbam_issue_pending;
 	qbam_dev->dma_dev.device_tx_status		= qbam_tx_status;
 
-	
+	/* Regiser to DMA framework */
 	ret = dma_async_device_register(&qbam_dev->dma_dev);
 	if (ret) {
 		qbam_err(qbam_dev, "error:%d dma_async_device_register()\n",
@@ -625,7 +714,7 @@ static int qbam_remove(struct platform_device *pdev)
 
 	dma_async_device_unregister(&qbam_dev->dma_dev);
 
-	
+	/* free BAM pipes resources */
 	qbam_pipes_free(qbam_dev);
 
 	if (qbam_dev->deregister_required)

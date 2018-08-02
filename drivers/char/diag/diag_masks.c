@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2015 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2016 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -281,13 +281,14 @@ static void diag_send_msg_mask_update(struct diag_smd_info *smd_info,
 	}
 
 	for (i = 0; i < driver->msg_mask_tbl_count; i++, mask++) {
-		if (((first < mask->ssid_first) || (last > mask->ssid_last)) &&
-							first != ALL_SSID) {
+		if (((first < mask->ssid_first) ||
+		     (last > mask->ssid_last_tools)) && first != ALL_SSID) {
 			continue;
 		}
 
 		if (msg_mask.status == DIAG_CTRL_MASK_VALID) {
-			mask_size = mask->ssid_last - mask->ssid_first + 1;
+			mask_size =
+				mask->ssid_last_tools - mask->ssid_first + 1;
 			temp_len = mask_size * sizeof(uint32_t);
 			if (temp_len + header_len <= msg_mask.update_buf_len)
 				goto proceed;
@@ -313,7 +314,7 @@ proceed:
 		header.stream_id = 1;
 		header.msg_mode = 0;
 		header.ssid_first = mask->ssid_first;
-		header.ssid_last = mask->ssid_last;
+		header.ssid_last = mask->ssid_last_tools;
 		header.msg_mask_size = mask_size;
 		mask_size *= sizeof(uint32_t);
 		header.data_len = MSG_MASK_CTRL_HEADER_LEN + mask_size;
@@ -391,7 +392,7 @@ static int diag_cmd_get_ssid_range(unsigned char *src_buf, int src_len,
 	struct diag_ssid_range_t ssid_range;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -415,7 +416,7 @@ static int diag_cmd_get_ssid_range(unsigned char *src_buf, int src_len,
 			break;
 		}
 		ssid_range.ssid_first = mask_ptr->ssid_first;
-		ssid_range.ssid_last = mask_ptr->ssid_last;
+		ssid_range.ssid_last = mask_ptr->ssid_last_tools;
 		memcpy(dest_buf + write_len, &ssid_range, sizeof(ssid_range));
 		write_len += sizeof(ssid_range);
 	}
@@ -435,7 +436,7 @@ static int diag_cmd_get_build_mask(unsigned char *src_buf, int src_len,
 	struct diag_msg_build_mask_t rsp;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -488,7 +489,7 @@ static int diag_cmd_get_msg_mask(unsigned char *src_buf, int src_len,
 	struct diag_msg_build_mask_t rsp;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -507,7 +508,7 @@ static int diag_cmd_get_msg_mask(unsigned char *src_buf, int src_len,
 	mask = (struct diag_msg_mask_t *)msg_mask.ptr;
 	for (i = 0; i < driver->msg_mask_tbl_count; i++, mask++) {
 		if ((req->ssid_first < mask->ssid_first) ||
-		    (req->ssid_first > mask->ssid_last)) {
+		    (req->ssid_first > mask->ssid_last_tools)) {
 			continue;
 		}
 		mask_size = mask->range * sizeof(uint32_t);
@@ -537,9 +538,10 @@ static int diag_cmd_set_msg_mask(unsigned char *src_buf, int src_len,
 	struct diag_msg_mask_t *mask = NULL;
 	struct diag_msg_build_mask_t *req = NULL;
 	struct diag_msg_build_mask_t rsp;
+	uint32_t *temp = NULL;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -550,26 +552,40 @@ static int diag_cmd_set_msg_mask(unsigned char *src_buf, int src_len,
 	mask = (struct diag_msg_mask_t *)msg_mask.ptr;
 	for (i = 0; i < driver->msg_mask_tbl_count; i++, mask++) {
 		if ((req->ssid_first < mask->ssid_first) ||
-		    (req->ssid_first > mask->ssid_last)) {
+		    (req->ssid_first > mask->ssid_last_tools)) {
 			continue;
 		}
 		found = 1;
-		if (req->ssid_last > mask->ssid_last) {
-			pr_debug("diag: Msg SSID range mismatch\n");
-			mask->ssid_last = req->ssid_last;
-		}
 		mask_size = req->ssid_last - req->ssid_first + 1;
-		if (mask_size > mask->range) {
+		if (mask_size > MAX_SSID_PER_RANGE) {
 			pr_warn("diag: In %s, truncating ssid range, %d-%d to max allowed: %d\n",
 				__func__, mask->ssid_first, mask->ssid_last,
-				mask->range);
-			mask_size = mask->range;
-			mask->ssid_last = mask->ssid_first + mask->range;
+				MAX_SSID_PER_RANGE);
+			mask_size = MAX_SSID_PER_RANGE;
+			mask->range_tools = MAX_SSID_PER_RANGE;
+			mask->ssid_last_tools =
+				mask->ssid_first + mask->range_tools;
 		}
+		if (req->ssid_last > mask->ssid_last_tools) {
+			pr_debug("diag: Msg SSID range mismatch\n");
+			if (mask_size != MAX_SSID_PER_RANGE)
+				mask->ssid_last_tools = req->ssid_last;
+			temp = krealloc(mask->ptr,
+					mask_size * sizeof(uint32_t),
+					GFP_KERNEL);
+			if (!temp) {
+				pr_err_ratelimited("diag: In %s, unable to allocate memory for msg mask ptr, mask_size: %d\n",
+						   __func__, mask_size);
+				return -ENOMEM;
+			}
+			mask->ptr = temp;
+			mask->range_tools = mask_size;
+		}
+
 		offset = req->ssid_first - mask->ssid_first;
-		if (offset + mask_size > mask->range) {
-			pr_err("diag: In %s, Not enough space for msg mask, mask_size: %d\n",
-			       __func__, mask_size);
+		if (offset + mask_size > mask->range_tools) {
+			pr_err("diag: In %s, Not in msg mask range, mask_size: %d, offset: %d\n",
+			       __func__, mask_size, offset);
 			break;
 		}
 		mask_size = mask_size * sizeof(uint32_t);
@@ -628,7 +644,7 @@ static int diag_cmd_set_all_msg_mask(unsigned char *src_buf, int src_len,
 	struct diag_msg_mask_t *mask = (struct diag_msg_mask_t *)msg_mask.ptr;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -684,7 +700,7 @@ static int diag_cmd_get_event_mask(unsigned char *src_buf, int src_len,
 	struct diag_event_mask_config_t rsp;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -722,7 +738,7 @@ static int diag_cmd_update_event_mask(unsigned char *src_buf, int src_len,
 	struct diag_event_mask_config_t *req;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -780,7 +796,7 @@ static int diag_cmd_toggle_events(unsigned char *src_buf, int src_len,
 	struct diag_event_report_t header;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -837,7 +853,7 @@ static int diag_cmd_get_log_mask(unsigned char *src_buf, int src_len,
 	struct diag_log_config_rsp_t rsp;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -907,7 +923,7 @@ static int diag_cmd_get_log_range(unsigned char *src_buf, int src_len,
 		return 0;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -946,7 +962,7 @@ static int diag_cmd_set_log_mask(unsigned char *src_buf, int src_len,
 	unsigned char *temp_buf = NULL;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -1051,7 +1067,7 @@ static int diag_cmd_disable_log_mask(unsigned char *src_buf, int src_len,
 	int i;
 
 	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0) {
-		pr_err("diag: Invalid input in %s, src_buf: %p, src_len: %d, dest_buf: %p, dest_len: %d",
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
 		       __func__, src_buf, src_len, dest_buf, dest_len);
 		return -EINVAL;
 	}
@@ -1101,9 +1117,11 @@ int diag_create_msg_mask_table_entry(struct diag_msg_mask_t *msg_mask,
 		return -EINVAL;
 	msg_mask->ssid_first = range->ssid_first;
 	msg_mask->ssid_last = range->ssid_last;
+	msg_mask->ssid_last_tools = range->ssid_last;
 	msg_mask->range = msg_mask->ssid_last - msg_mask->ssid_first + 1;
 	if (msg_mask->range < MAX_SSID_PER_RANGE)
 		msg_mask->range = MAX_SSID_PER_RANGE;
+	msg_mask->range_tools = msg_mask->range;
 	if (msg_mask->range > 0) {
 		msg_mask->ptr = kzalloc(msg_mask->range * sizeof(uint32_t),
 					GFP_KERNEL);
@@ -1460,14 +1478,15 @@ int diag_copy_to_user_msg_mask(char __user *buf, size_t count)
 		ptr = msg_mask.update_buf;
 		len = 0;
 		header.ssid_first = mask->ssid_first;
-		header.ssid_last = mask->ssid_last;
-		header.range = mask->range;
+		header.ssid_last = mask->ssid_last_tools;
+		header.range = mask->range_tools;
 		memcpy(ptr, &header, sizeof(header));
 		len += sizeof(header);
-		copy_len = (sizeof(uint32_t) * mask->range);
+		copy_len = (sizeof(uint32_t) * mask->range_tools);
 		if ((len + copy_len) > msg_mask.update_buf_len) {
 			pr_err("diag: In %s, no space to update msg mask, first: %d, last: %d\n",
-			       __func__, mask->ssid_first, mask->ssid_last);
+			       __func__, mask->ssid_first,
+			       mask->ssid_last_tools);
 			continue;
 		}
 		memcpy(ptr + len, mask->ptr, copy_len);

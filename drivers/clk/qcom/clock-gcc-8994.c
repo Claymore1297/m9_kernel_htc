@@ -2560,11 +2560,15 @@ static int gcc_set_mux_sel(struct mux_clk *clk, int sel)
 {
 	u32 regval;
 
-	
+	/* Zero out CDIV bits in top level debug mux register */
 	regval = readl_relaxed(GCC_REG_BASE(GCC_DEBUG_CLK_CTL));
 	regval &= ~BM(15, 12);
 	writel_relaxed(regval, GCC_REG_BASE(GCC_DEBUG_CLK_CTL));
 
+	/*
+	 * RPM clocks use the same GCC debug mux. Don't reprogram
+	 * the mux (selection) register.
+	 */
 	if (sel == 0xFFFF)
 		return 0;
 	mux_reg_ops.set_mux_sel(clk, sel);
@@ -2932,7 +2936,7 @@ static int msm_gcc_8994_probe(struct platform_device *pdev)
 		return PTR_ERR(tmp_clk);
 	}
 
-	
+	/* Perform revision specific fixes */
 	compat = of_get_property(pdev->dev.of_node, "compatible", &compatlen);
 	if (!compat || (compatlen <= 0))
 		return -EINVAL;
@@ -2940,14 +2944,14 @@ static int msm_gcc_8994_probe(struct platform_device *pdev)
 	if (is_v2)
 		msm_gcc_8994v2_fixup();
 
-	
+	/* register common clock table */
 	ret = of_msm_clock_register(pdev->dev.of_node, gcc_clocks_8994_common,
 				    ARRAY_SIZE(gcc_clocks_8994_common));
 	if (ret)
 		return ret;
 
 	if (!is_v2) {
-		
+		/* register v1 specific clocks */
 		ret = of_msm_clock_register(pdev->dev.of_node,
 			gcc_clocks_8994_v1, ARRAY_SIZE(gcc_clocks_8994_v1));
 		if (ret)
@@ -2979,6 +2983,7 @@ int __init msm_gcc_8994_init(void)
 }
 arch_initcall(msm_gcc_8994_init);
 
+/* ======== Clock Debug Controller ======== */
 static struct clk_lookup msm_clocks_measure_8994[] = {
 	CLK_LIST(debug_mmss_clk),
 	CLK_LIST(debug_rpm_clk),
@@ -3086,6 +3091,7 @@ int is_xo_src(struct clk *clk)
                 return 0;
 }
 
+/*[HTC] added for clock debugging*/
 void clk_ignore_list_add(const char *clock_name)
 {
 	struct clk_lookup *p, *cl = NULL;
@@ -3101,6 +3107,7 @@ void clk_ignore_list_add(const char *clock_name)
 	cl->clk->flags |= CLKFLAG_IGNORE;
 }
 
+/*[HTC] added for clock debugging*/
 int __init clk_ignore_list_init(void)
 {
 	clk_ignore_list_add("gcc_blsp1_uart2_apps_clk");

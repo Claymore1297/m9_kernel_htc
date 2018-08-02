@@ -27,22 +27,23 @@
 
 static struct mutex managed_cpus_lock;
 
+/* Maximum number to clusters that this module will manage*/
 static unsigned int num_clusters;
 struct cluster {
 	cpumask_var_t cpus;
-	
+	/* Number of CPUs to maintain online */
 	int max_cpu_request;
-	
+	/* To track CPUs that the module decides to offline */
 	cpumask_var_t offlined_cpus;
-	
-	
+	/* stats for load detection */
+	/* IO */
 	u64 last_io_check_ts;
 	unsigned int iowait_enter_cycle_cnt;
 	unsigned int iowait_exit_cycle_cnt;
 	spinlock_t iowait_lock;
 	unsigned int cur_io_busy;
 	bool io_change;
-	
+	/* CPU */
 	unsigned int mode;
 	bool mode_change;
 	u64 last_mode_check_ts;
@@ -51,7 +52,7 @@ struct cluster {
 	unsigned int multi_enter_cycle_cnt;
 	unsigned int multi_exit_cycle_cnt;
 	spinlock_t mode_lock;
-	
+	/* Tunables */
 	unsigned int single_enter_load;
 	unsigned int pcpu_multi_enter_load;
 	unsigned int single_exit_load;
@@ -67,8 +68,10 @@ struct cluster {
 static struct cluster **managed_clusters;
 static bool clusters_inited;
 
+/* Work to evaluate the onlining/offlining CPUs */
 struct delayed_work evaluate_hotplug_work;
 
+/* To handle cpufreq min/max request */
 struct cpu_status {
 	unsigned int min;
 	unsigned int max;
@@ -84,10 +87,10 @@ static DEFINE_PER_CPU(unsigned int, cpu_power_cost);
 
 struct load_stats {
 	u64 last_wallclock;
-	
+	/* IO wait related */
 	u64 last_iowait;
 	unsigned int last_iopercent;
-	
+	/* CPU load related */
 	unsigned int cpu_load;
 };
 static DEFINE_PER_CPU(struct load_stats, cpu_load_stats);
@@ -102,10 +105,12 @@ static struct task_struct *events_notify_thread;
 
 #define LAST_UPDATE_TOL		USEC_PER_MSEC
 
+/* Bitmask to keep track of the workloads being detected */
 static unsigned int workload_detect;
 #define IO_DETECT	1
 #define MODE_DETECT	2
 
+/* IOwait related tunables */
 static unsigned int io_enter_cycles = 4;
 static unsigned int io_exit_cycles = 4;
 static u64 iowait_ceiling_pct = 25;
@@ -117,6 +122,7 @@ static unsigned int aggr_mode;
 
 static struct task_struct *notify_thread;
 
+/* CPU workload detection related */
 #define NO_MODE		(0)
 #define SINGLE		(1)
 #define MULTI		(2)
@@ -131,6 +137,7 @@ static struct task_struct *notify_thread;
 #define DEF_MULTI_EXIT_CYCLE	4
 #define LAST_LD_CHECK_TOL	(2 * USEC_PER_MSEC)
 
+/**************************sysfs start********************************/
 
 static int set_num_clusters(const char *buf, const struct kernel_param *kp)
 {
@@ -270,6 +277,7 @@ static const struct kernel_param_ops param_ops_managed_cpus = {
 };
 device_param_cb(managed_cpus, &param_ops_managed_cpus, NULL, 0644);
 
+/* Read-only node: To display all the online managed CPUs */
 static int get_managed_online_cpus(char *buf, const struct kernel_param *kp)
 {
 	int i, cnt = 0;
@@ -303,6 +311,10 @@ static const struct kernel_param_ops param_ops_managed_online_cpus = {
 device_param_cb(managed_online_cpus, &param_ops_managed_online_cpus,
 								NULL, 0444);
 
+/*
+ * Userspace sends cpu#:min_freq_value to vote for min_freq_value as the new
+ * scaling_min. To withdraw its vote it needs to enter cpu#:0
+ */
 static int set_cpu_min_freq(const char *buf, const struct kernel_param *kp)
 {
 	int i, j, ntokens = 0;
@@ -316,7 +328,7 @@ static int set_cpu_min_freq(const char *buf, const struct kernel_param *kp)
 	while ((cp = strpbrk(cp + 1, " :")))
 		ntokens++;
 
-	
+	/* CPU:value pair */
 	if (!(ntokens % 2))
 		return -EINVAL;
 
@@ -337,6 +349,13 @@ static int set_cpu_min_freq(const char *buf, const struct kernel_param *kp)
 		cp++;
 	}
 
+	/*
+	 * Since on synchronous systems policy is shared amongst multiple
+	 * CPUs only one CPU needs to be updated for the limit to be
+	 * reflected for the entire cluster. We can avoid updating the policy
+	 * of other CPUs in the cluster once it is done for at least one CPU
+	 * in the cluster
+	 */
 	get_online_cpus();
 	for_each_cpu(i, limit_mask) {
 		i_cpu_stats = &per_cpu(cpu_stats, i);
@@ -375,6 +394,10 @@ static const struct kernel_param_ops param_ops_cpu_min_freq = {
 };
 module_param_cb(cpu_min_freq, &param_ops_cpu_min_freq, NULL, 0644);
 
+/*
+ * Userspace sends cpu#:max_freq_value to vote for max_freq_value as the new
+ * scaling_max. To withdraw its vote it needs to enter cpu#:UINT_MAX
+ */
 static int set_cpu_max_freq(const char *buf, const struct kernel_param *kp)
 {
 	int i, j, ntokens = 0;
@@ -388,7 +411,7 @@ static int set_cpu_max_freq(const char *buf, const struct kernel_param *kp)
 	while ((cp = strpbrk(cp + 1, " :")))
 		ntokens++;
 
-	
+	/* CPU:value pair */
 	if (!(ntokens % 2))
 		return -EINVAL;
 
@@ -1065,6 +1088,7 @@ static struct attribute_group attr_group = {
 	.attrs = attrs,
 };
 
+/* CPU Hotplug */
 static struct kobject *events_kobj;
 
 static ssize_t show_cpu_hotplug(struct kobject *kobj,
@@ -1083,6 +1107,7 @@ static struct attribute *events_attrs[] = {
 static struct attribute_group events_attr_group = {
 	.attrs = events_attrs,
 };
+/*******************************sysfs ends************************************/
 
 static unsigned int num_online_managed(struct cpumask *mask)
 {
@@ -1320,7 +1345,7 @@ static void start_timer(struct cluster *cl)
 
 	spin_lock_irqsave(&cl->timer_lock, flags);
 	if ((cl->mode & SINGLE) && !timer_pending(&cl->mode_exit_timer)) {
-		
+		/*Set timer for the Cluster since there is none pending*/
 		cl->mode_exit_timer.expires = get_jiffies_64() +
 		usecs_to_jiffies(cl->single_exit_cycles * cl->timer_rate);
 		cl->mode_exit_timer.data = cpumask_first(cl->cpus);
@@ -1493,6 +1518,10 @@ static int perf_govinfo_notify(struct notifier_block *nb, unsigned long val,
 	cpu_st->last_iowait = cur_iowait;
 	cpu_st->cpu_load = gov_info->load;
 
+	/*
+	 * Avoid deadlock in case governor notifier ran in the context
+	 * of notify_work thread
+	 */
 	if (current == notify_thread)
 		return NOTIFY_OK;
 
@@ -1504,6 +1533,10 @@ static struct notifier_block perf_govinfo_nb = {
 	.notifier_call = perf_govinfo_notify,
 };
 
+/*
+ * Attempt to offline CPUs based on their power cost.
+ * CPUs with higher power costs are offlined first.
+ */
 static int __ref rm_high_pwr_cost_cpus(struct cluster *cl)
 {
 	unsigned int cpu, i;
@@ -1571,6 +1604,11 @@ end:
 		return 0;
 }
 
+/*
+ * try_hotplug tries to online/offline cores based on the current requirement.
+ * It loops through the currently managed CPUs and tries to online/offline
+ * them until the max_cpu_request criteria is met.
+ */
 static void __ref try_hotplug(struct cluster *data)
 {
 	unsigned int i;
@@ -1588,6 +1626,10 @@ static void __ref try_hotplug(struct cluster *data)
 			return;
 		}
 
+		/*
+		 * If power aware offlining fails due to power cost info
+		 * being unavaiable fall back to original implementation
+		 */
 		for (i = num_present_cpus() - 1; i >= 0 &&
 						i < num_present_cpus(); i--) {
 			if (!cpumask_test_cpu(i, data->cpus) ||	!cpu_online(i))
@@ -1635,6 +1677,7 @@ static void __ref release_cluster_control(struct cpumask *off_cpus)
 	}
 }
 
+/* Work to evaluate current online CPU status and hotplug CPUs as per need*/
 static void check_cluster_status(struct work_struct *work)
 {
 	int i;
@@ -1683,6 +1726,10 @@ static int __ref msm_performance_cpu_callback(struct notifier_block *nfb,
 		return NOTIFY_OK;
 
 	if (action == CPU_UP_PREPARE || action == CPU_UP_PREPARE_FROZEN) {
+		/*
+		 * Prevent onlining of a managed CPU if max_cpu criteria is
+		 * already satisfied
+		 */
 		if (i_cl->offlined_cpus == NULL)
 			return NOTIFY_OK;
 		if (i_cl->max_cpu_request <=
@@ -1698,6 +1745,11 @@ static int __ref msm_performance_cpu_callback(struct notifier_block *nfb,
 			return NOTIFY_OK;
 		if (cpumask_test_cpu(cpu, i_cl->offlined_cpus))
 			return NOTIFY_OK;
+		/*
+		 * Schedule a re-evaluation to check if any more CPUs can be
+		 * brought online to meet the max_cpu_request requirement. This
+		 * work is delayed to account for CPU hotplug latencies
+		 */
 		if (schedule_delayed_work(&evaluate_hotplug_work, 0)) {
 			trace_reevaluate_hotplug(cpumask_bits(i_cl->cpus)[0],
 							i_cl->max_cpu_request);
@@ -1735,7 +1787,7 @@ static void single_mod_exit_timer(unsigned long data)
 
 	spin_lock_irqsave(&i_cl->mode_lock, flags);
 	if (i_cl->mode & SINGLE) {
-		
+		/*Disable SINGLE mode and exit since the timer expired*/
 		i_cl->mode = i_cl->mode & ~SINGLE;
 		i_cl->single_enter_cycle_cnt = 0;
 		i_cl->single_exit_cycle_cnt = 0;

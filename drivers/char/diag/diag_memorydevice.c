@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -141,7 +141,7 @@ int diag_md_write(int id, unsigned char *buf, int len, int ctx)
 		if (ch->tbl[i].buf != buf)
 			continue;
 		found = 1;
-		pr_err_ratelimited("diag: trying to write the same buffer buf: %p, ctxt: %d len: %d at i: %d back to the table, proc: %d, mode: %d\n",
+		pr_err_ratelimited("diag: trying to write the same buffer buf: %pK, ctxt: %d len: %d at i: %d back to the table, proc: %d, mode: %d\n",
 				   buf, ctx, ch->tbl[i].len,
 				   i, id, driver->logging_mode);
 	}
@@ -176,7 +176,7 @@ int diag_md_write(int id, unsigned char *buf, int len, int ctx)
 /*++ 2014/10/22, USB Team, PCN00022 ++*/
 		driver->data_ready[i] |= USERMODE_DIAGFWD;
 /*-- 2014/10/22, USB Team, PCN00022--*/
-		pr_debug("diag: wake up logging process\n");
+		SDLOG_DBUG("diag: wake up logging process\n");
 		wake_up_interruptible(&driver->wait_q);
 	}
 

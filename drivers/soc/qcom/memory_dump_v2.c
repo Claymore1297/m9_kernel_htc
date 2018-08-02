@@ -17,6 +17,7 @@
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/kmemleak.h>
 #include <soc/qcom/memory_dump.h>
 #include <soc/qcom/scm.h>
 
@@ -85,7 +86,7 @@ static struct msm_dump_table *msm_dump_get_table(enum msm_dump_table_ids id)
 		return ERR_PTR(-EINVAL);
 	}
 
-	
+	/* Get the apps table pointer */
 #if defined(CONFIG_HTC_DEBUG_MEM_DUMP_TABLE)
 	if(id == MSM_DUMP_TABLE_APPS)
 		table = dump_table_apps_addr;
@@ -175,7 +176,7 @@ static int __init init_memory_dump(void)
 	memdump.table_phys = virt_to_phys(memdump.table);
 #endif
 	writel_relaxed(memdump.table_phys, imem_base);
-	
+	/* Ensure write to imem_base is complete before unmapping */
 	mb();
 	pr_info("MSM Memory Dump base table set up\n");
 
@@ -189,7 +190,7 @@ static int __init init_memory_dump(void)
 		goto err1;
 	}
 	dump_table_apps_addr = table;
-	
+	/* memory dump table and MSM_DUMP_TAABLE_APPS are already initialized in LK, so just return */
 	pr_info("MSM Memory Dump apps data table already set up in LK\n");
 	return 0;
 #else
@@ -200,6 +201,7 @@ static int __init init_memory_dump(void)
 		goto err1;
 	}
 #endif
+	kmemleak_not_leak(table);
 	table->version = MSM_DUMP_TABLE_VERSION;
 
 	entry.id = MSM_DUMP_TABLE_APPS;

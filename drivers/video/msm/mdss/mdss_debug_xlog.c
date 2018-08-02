@@ -28,9 +28,9 @@
 #define XLOG_DEFAULT_ENABLE 0
 #endif
 
-#define XLOG_DEFAULT_PANIC 1
-#define XLOG_DEFAULT_REGDUMP 0x2 
-#define XLOG_DEFAULT_DBGBUSDUMP 0x3 
+#define XLOG_DEFAULT_PANIC 0 /* HTC: disable panic */
+#define XLOG_DEFAULT_REGDUMP 0x2 /* dump in RAM */
+#define XLOG_DEFAULT_DBGBUSDUMP 0x3 /* dump in LOG & RAM */
 
 #define MDSS_XLOG_ENTRY	256
 #define MDSS_XLOG_MAX_DATA 6
@@ -61,7 +61,7 @@ struct mdss_dbg_xlog {
 	struct mdss_debug_base *blk_arr[MDSS_DEBUG_BASE_MAX];
 	bool work_panic;
 	bool work_dbgbus;
-	u32 *dbgbus_dump; 
+	u32 *dbgbus_dump; /* address for the debug bus dump */
 } mdss_dbg_xlog;
 
 static inline bool mdss_xlog_is_enabled(u32 flag)
@@ -107,6 +107,7 @@ void mdss_xlog(const char *name, int line, int flag, ...)
 	spin_unlock_irqrestore(&xlock, flags);
 }
 
+/* always dump the last entries which are not dumped yet */
 static bool __mdss_xlog_dump_calc_range(void)
 {
 	static u32 next;
@@ -221,7 +222,7 @@ static void mdss_dump_debug_bus(u32 bus_dump_flag,
 	if (!(mdata->dbg_bus && list_size))
 		return;
 
-	
+	/* will keep in memory 4 entries of 4 bytes each */
 	list_size = (list_size * 4 * 4);
 
 	in_log = (bus_dump_flag & MDSS_DBG_DUMP_IN_LOG);
@@ -346,7 +347,7 @@ static void mdss_dump_reg_by_ranges(struct mdss_debug_base *dbg,
 
 	pr_info("%s:=========%s DUMP=========\n", __func__, dbg->name);
 
-	
+	/* If there is a list to dump the registers by ranges, use the ranges */
 	if (!list_empty(&dbg->dump_list)) {
 		list_for_each_entry_safe(xlog_node, xlog_tmp,
 			&dbg->dump_list, head) {
@@ -361,7 +362,7 @@ static void mdss_dump_reg_by_ranges(struct mdss_debug_base *dbg,
 				&xlog_node->reg_dump);
 		}
 	} else {
-		
+		/* If there is no list to dump ranges, dump all registers */
 		pr_info("Ranges not found, will dump full registers");
 		pr_info("base:0x%p len:0x%zu\n", dbg->base, dbg->max_offset);
 		addr = dbg->base;
@@ -506,7 +507,7 @@ void mdss_xlog_tout_handler_default(bool enforce_dump, bool queue,
 	va_end(args);
 
 	if (queue) {
-		
+		/* schedule work to dump later */
 		mdss_dbg_xlog.work_panic = dead;
 		mdss_dbg_xlog.work_dbgbus = dump_dbgbus;
 		schedule_work(&mdss_dbg_xlog.xlog_dump_work);
@@ -531,7 +532,7 @@ int mdss_xlog_tout_handler_iommu(struct iommu_domain *domain,
 
 static int mdss_xlog_dump_open(struct inode *inode, struct file *file)
 {
-	
+	/* non-seekable */
 	file->f_mode &= ~(FMODE_LSEEK | FMODE_PREAD | FMODE_PWRITE);
 	file->private_data = inode->i_private;
 	return 0;

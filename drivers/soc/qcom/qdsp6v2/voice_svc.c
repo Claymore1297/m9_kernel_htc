@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -103,6 +103,8 @@ static int32_t qdsp_apr_callback(struct apr_client_data *data, void *priv)
 		} else if (data->reset_proc == APR_DEST_MODEM) {
 			pr_debug("%s: Received Modem reset event\n", __func__);
 		}
+		/* Set the remaining member variables to default values
+			for RESET_EVENTS */
 		data->payload_size = 0;
 		data->payload = NULL;
 		data->src_port = 0;
@@ -125,6 +127,9 @@ static int32_t qdsp_apr_callback(struct apr_client_data *data, void *priv)
 
 		response_list->resp.src_port = data->src_port;
 
+		/* Reverting the bit manipulation done in voice_svc_update_hdr
+		 * to the src_port which is returned to us as dest_port.
+		 */
 		response_list->resp.dest_port = ((data->dest_port) >> 8);
 		response_list->resp.token = data->token;
 		response_list->resp.opcode = data->opcode;
@@ -150,7 +155,7 @@ static int32_t qdsp_apr_callback(struct apr_client_data *data, void *priv)
 
 static int32_t qdsp_dummy_apr_callback(struct apr_client_data *data, void *priv)
 {
-	
+	/* Do Nothing */
 	return 0;
 }
 
@@ -161,6 +166,12 @@ static void voice_svc_update_hdr(struct voice_svc_cmd_request *apr_req_data,
 	aprdata->hdr.hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD,
 				       APR_HDR_LEN(sizeof(struct apr_hdr)),
 				       APR_PKT_VER);
+	/* Bit manipulation is done on src_port so that a unique ID is sent.
+	 * This manipulation can be used in the future where the same service
+	 * is tried to open multiple times with the same src_port. At that
+	 * time 0x0001 can be replaced with other values depending on the
+	 * count.
+	 */
 	aprdata->hdr.src_port = ((apr_req_data->src_port) << 8 | 0x0001);
 	aprdata->hdr.dest_port = apr_req_data->dest_port;
 	aprdata->hdr.token = apr_req_data->token;
@@ -177,7 +188,8 @@ static int voice_svc_send_req(struct voice_svc_cmd_request *apr_request,
 	int ret = 0;
 	void *apr_handle = NULL;
 	struct apr_data *aprdata = NULL;
-	uint32_t user_payload_size = 0;
+	uint32_t user_payload_size;
+	uint32_t payload_size;
 
 	pr_debug("%s\n", __func__);
 
@@ -189,15 +201,19 @@ static int voice_svc_send_req(struct voice_svc_cmd_request *apr_request,
 	}
 
 	user_payload_size = apr_request->payload_size;
+	payload_size = sizeof(struct apr_data) + user_payload_size;
 
-	aprdata = kmalloc(sizeof(struct apr_data) + user_payload_size,
-			  GFP_KERNEL);
-
-	if (aprdata == NULL) {
-		pr_err("%s: aprdata kmalloc failed.\n", __func__);
-
-		ret = -ENOMEM;
+	if (payload_size <= user_payload_size) {
+		pr_err("%s: invalid payload size ( 0x%x ).\n",
+			__func__, user_payload_size);
+		ret = -EINVAL;
 		goto done;
+	} else {
+		aprdata = kmalloc(payload_size, GFP_KERNEL);
+		if (aprdata == NULL) {
+			ret = -ENOMEM;
+			goto done;
+		}
 	}
 
 	voice_svc_update_hdr(apr_request, aprdata);
@@ -235,7 +251,7 @@ static int voice_svc_reg(char *svc, uint32_t src_port,
 {
 	int ret = 0;
 
-	pr_info("%s\n", __func__); 
+	pr_info("%s\n", __func__); //HTC_AUD_MOD
 
 	if (handle == NULL) {
 		pr_err("%s: handle is NULL\n", __func__);
@@ -268,7 +284,7 @@ static int voice_svc_reg(char *svc, uint32_t src_port,
 		ret = -EFAULT;
 		goto done;
 	}
-	pr_info("%s: Register %s successful\n", 
+	pr_info("%s: Register %s successful\n", // HTC_AUD_MOD
 		__func__, svc);
 done:
 	return ret;
@@ -278,7 +294,7 @@ static int voice_svc_dereg(char *svc, void **handle)
 {
 	int ret = 0;
 
-	pr_info("%s\n", __func__); 
+	pr_info("%s\n", __func__); // HTC_AUD_MOD
 
 	if (handle == NULL) {
 		pr_err("%s: handle is NULL\n", __func__);
@@ -300,7 +316,7 @@ static int voice_svc_dereg(char *svc, void **handle)
 		goto done;
 	}
 	*handle = NULL;
-	pr_info("%s: deregister %s successful\n", __func__, svc); 
+	pr_info("%s: deregister %s successful\n", __func__, svc); // HTC_AUD_MOD
 
 done:
 	return ret;
@@ -377,18 +393,31 @@ static ssize_t voice_svc_write(struct file *file, const char __user *buf,
 
 	switch (cmd) {
 	case MSG_REGISTER:
-		ret = process_reg_cmd(
+		if (count  >=
+				(sizeof(struct voice_svc_register) +
+				sizeof(*data))) {
+			ret = process_reg_cmd(
 			(struct voice_svc_register *)data->payload, prtd);
-		if (!ret)
-			ret = count;
-
+			if (!ret)
+				ret = count;
+		} else {
+			pr_err("%s: invalid payload size\n", __func__);
+			ret = -EINVAL;
+			goto done;
+		}
 		break;
 	case MSG_REQUEST:
+	if (count >= (sizeof(struct voice_svc_cmd_request) +
+					sizeof(*data))) {
 		ret = voice_svc_send_req(
 			(struct voice_svc_cmd_request *)data->payload, prtd);
 		if (!ret)
 			ret = count;
-
+	} else {
+		pr_err("%s: invalid payload size\n", __func__);
+		ret = -EINVAL;
+		goto done;
+	}
 		break;
 	default:
 		pr_debug("%s: Invalid command: %u\n", __func__, cmd);
@@ -482,11 +511,11 @@ static ssize_t voice_svc_read(struct file *file, char __user *arg,
 
 	spin_lock_irqsave(&prtd->response_lock, spin_flags);
 
-	
+	// htc_audio ++
 	if (list_empty(&prtd->response_queue)) {
 		pr_err("%s: response queue is empty before del!!!", __func__);
 	}
-	
+	// htc_audio --
 	list_del(&resp->list);
 	prtd->response_count--;
 	kfree(resp);
@@ -535,7 +564,7 @@ static int voice_svc_open(struct inode *inode, struct file *file)
 {
 	struct voice_svc_prvt *prtd = NULL;
 
-	pr_info("%s\n", __func__); 
+	pr_info("%s\n", __func__); // HTC_AUD_MOD
 
 	prtd = kmalloc(sizeof(struct voice_svc_prvt), GFP_KERNEL);
 
@@ -553,6 +582,12 @@ static int voice_svc_open(struct inode *inode, struct file *file)
 	spin_lock_init(&prtd->response_lock);
 	file->private_data = (void *)prtd;
 
+	/* Current APR implementation doesn't support session based
+	 * multiple service registrations. The apr_deregister()
+	 * function sets the destination and client IDs to zero, if
+	 * deregister is called for a single service instance.
+	 * To avoid this, register for additional services.
+	 */
 	if (!reg_dummy_sess) {
 		voice_svc_dummy_reg();
 		reg_dummy_sess = 1;
@@ -569,7 +604,7 @@ static int voice_svc_release(struct inode *inode, struct file *file)
 	char *svc_name = NULL;
 	void **handle = NULL;
 
-	pr_info("%s ++\n", __func__); 
+	pr_info("%s ++\n", __func__); // HTC_AUD_MOD
 
 	prtd = (struct voice_svc_prvt *)file->private_data;
 	if (prtd == NULL) {
@@ -580,8 +615,8 @@ static int voice_svc_release(struct inode *inode, struct file *file)
 	}
 
 	if (prtd->apr_q6_cvs != NULL) {
-		pr_info("%s: voice_svc_dereg VOICE_SVC_CVS_STR\n", __func__); 
-		svc_name = VOICE_SVC_CVS_STR; 
+		pr_info("%s: voice_svc_dereg VOICE_SVC_CVS_STR\n", __func__); // HTC_AUD_ADD
+		svc_name = VOICE_SVC_CVS_STR; // HTC_AUD_MOD
 		handle = &prtd->apr_q6_cvs;
 		ret = voice_svc_dereg(svc_name, handle);
 		if (ret)
@@ -589,7 +624,7 @@ static int voice_svc_release(struct inode *inode, struct file *file)
 	}
 
 	if (prtd->apr_q6_mvm != NULL) {
-		pr_info("%s: voice_svc_dereg VOICE_SVC_MVM_STR\n", __func__); 
+		pr_info("%s: voice_svc_dereg VOICE_SVC_MVM_STR\n", __func__); // HTC_AUD_ADD
 		svc_name = VOICE_SVC_MVM_STR;
 		handle = &prtd->apr_q6_mvm;
 		ret = voice_svc_dereg(svc_name, handle);
@@ -600,7 +635,7 @@ static int voice_svc_release(struct inode *inode, struct file *file)
 	spin_lock_irqsave(&prtd->response_lock, spin_flags);
 
 	while (!list_empty(&prtd->response_queue)) {
-		pr_info("%s: Remove item from response queue\n", __func__); 
+		pr_info("%s: Remove item from response queue\n", __func__); // HTC_AUD_MOD
 
 		resp = list_first_entry(&prtd->response_queue,
 					struct apr_response_list, list);
@@ -614,7 +649,7 @@ static int voice_svc_release(struct inode *inode, struct file *file)
 	kfree(file->private_data);
 	file->private_data = NULL;
 
-	pr_info("%s --\n", __func__); 
+	pr_info("%s --\n", __func__); // HTC_AUD_MOD
 done:
 	return ret;
 }

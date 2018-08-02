@@ -36,18 +36,22 @@
 #include "../codecs/wcd9xxx-common.h"
 #include "../codecs/wcd9330.h"
 
+//htc audio ++
 #include <sound/q6adm-v2.h>
 #include <sound/htc_acoustic_alsa.h>
 #include <linux/of_device.h>
+#include <linux/qpnp/qpnp-adc.h>
+
 #undef pr_info
 #undef pr_err
 #define pr_info(fmt, ...) pr_aud_info(fmt, ##__VA_ARGS__)
 #define pr_err(fmt, ...) pr_aud_err(fmt, ##__VA_ARGS__)
+//htc audio --
 #define DRV_NAME "msm8994-asoc-snd"
 
-#define MSM8994_BRINGUP	(0)	
-#define MSM8994_LDO_WR	(0)	
-				
+#define MSM8994_BRINGUP	(0)	/* htc audio, set only for bring up */
+#define MSM8994_LDO_WR	(0)	/* htc audio, to fix LDO29 cause i2c bus error */
+				/* This macro also defined in rt5506 and tfa9887 drivers!! */
 #define SAMPLING_RATE_8KHZ      8000
 #define SAMPLING_RATE_16KHZ     16000
 #define SAMPLING_RATE_32KHZ     32000
@@ -60,10 +64,12 @@
 
 #define MSM_SLIM_0_RX_MAX_CHANNELS    2
 #define MSM_SLIM_0_TX_MAX_CHANNELS    4
+//htc audio ++
 #define LO_1_SPK_AMP    0x1
 #define LO_3_SPK_AMP    0x2
 #define LO_2_SPK_AMP    0x4
 #define LO_4_SPK_AMP    0x8
+//htc audio --
 #define I2S_PCM_SEL_PCM       1
 #define I2S_PCM_SEL_I2S       0
 #define I2S_PCM_SEL_OFFSET    1
@@ -87,6 +93,7 @@ enum mi2s_pcm_mux {
 	TERT_MI2S_PCM,
 	QUAT_MI2S_PCM
 };
+//htc audio ++
 enum wcd_mux {
 	WCD_CLK2 = 0
 };
@@ -96,6 +103,7 @@ enum pinctrl_type {
 	AUXPCM_PIN_TYPE,
 	WCD_PIN_TYPE,
 };
+//htc audio --
 struct msm_pinctrl_info {
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *disable;
@@ -120,9 +128,12 @@ struct msm8994_asoc_mach_data {
 	struct msm_pinctrl_info sec_mi2s_pinctrl_info;
 	struct msm_pinctrl_info tert_mi2s_pinctrl_info;
 	struct msm_pinctrl_info quat_mi2s_pinctrl_info;
+//htc audio ++
 	struct msm_pinctrl_info wcd_clk2_pinctrl_info;
 	struct msm_pinctrl_info ftm_sec_auxpcm_pinctrl_info;
+//htc audio --
 };
+//htc audio ++
 struct htc_request_gpio {
 	unsigned gpio_no;
 	const char* gpio_name;
@@ -171,22 +182,26 @@ static struct aud_btpcm_config {
 	.mode = AUD_FTM_BTPCM_MODE_PCM,
 	.pinctrl_info = NULL,
 	.gpio = {
-		{ .gpio_name = "ftm-btpcm-sync",},	
-		{ .gpio_name = "ftm-btpcm-clock",},	
-		{ .gpio_name = "ftm-btpcm-dout",},	
-		{ .gpio_name = "ftm-btpcm-din",},	
+		{ .gpio_name = "ftm-btpcm-sync",},	/* frame sync */
+		{ .gpio_name = "ftm-btpcm-clock",},	/* bit clock */
+		{ .gpio_name = "ftm-btpcm-dout",},	/* BT to MSM */
+		{ .gpio_name = "ftm-btpcm-din",},	/* MSM to BT */
 	},
 };
 
 #if MSM8994_LDO_WR
 static int hph_en_ready = 0;
 #endif
+//htc audio --
 
 static int slim0_rx_sample_rate = SAMPLING_RATE_48KHZ;
 static int slim0_tx_sample_rate = SAMPLING_RATE_48KHZ;
 static int slim0_rx_bit_format = SNDRV_PCM_FORMAT_S16_LE;
 static int slim0_tx_bit_format = SNDRV_PCM_FORMAT_S16_LE;
+// htc audio ++
+//static int hdmi_rx_bit_format = SNDRV_PCM_FORMAT_S16_LE;
 static int hdmi_rx_bit_format = SNDRV_PCM_FORMAT_S24_LE;
+// htc audio --
 static int msm8994_auxpcm_rate = 8000;
 
 static struct platform_device *spdev;
@@ -218,8 +233,11 @@ struct audio_plug_dev {
 
 static struct audio_plug_dev *msm8994_liquid_dock_dev;
 
+/* Rear panel audio jack which connected to LO1&2 */
 static struct audio_plug_dev *apq8094_db_ext_bp_out_dev;
+/* Front panel audio jack which connected to LO3&4 */
 static struct audio_plug_dev *apq8094_db_ext_fp_in_dev;
+/* Front panel audio jack which connected to Line in (ADC6) */
 static struct audio_plug_dev *apq8094_db_ext_fp_out_dev;
 
 
@@ -232,7 +250,7 @@ static const char *const slim0_tx_ch_text[] = {"One", "Two", "Three", "Four",
 						"Eight"};
 static char const *hdmi_rx_ch_text[] = {"Two", "Three", "Four", "Five",
 					"Six", "Seven", "Eight"};
-static char const *rx_bit_format_text[] = {"S16_LE", "S24_LE"};
+static char const *rx_bit_format_text[] = {"S16_LE", "S24_LE", "S24_3LE"};
 static char const *slim0_rx_sample_rate_text[] = {"KHZ_48", "KHZ_96",
 					"KHZ_192"};
 static const char *const proxy_rx_ch_text[] = {"One", "Two", "Three", "Four",
@@ -251,12 +269,15 @@ static const struct soc_enum msm8994_auxpcm_enum[] = {
 };
 
 static void *adsp_state_notifier;
-#ifdef USE_CODEC_MBHC
+//htc audio ++
+#ifdef CONFIG_USE_CODEC_MBHC
 static void *def_codec_mbhc_cal(void);
 #endif
+//htc audio --
 static int msm_snd_enable_codec_ext_clk(struct snd_soc_codec *codec,
 					int enable, bool dapm);
-#ifdef USE_CODEC_MBHC
+//htc audio ++
+#ifdef CONFIG_USE_CODEC_MBHC
 static struct wcd9xxx_mbhc_config mbhc_cfg = {
 	.read_fw_bin = false,
 	.calibration = NULL,
@@ -264,7 +285,7 @@ static struct wcd9xxx_mbhc_config mbhc_cfg = {
 	.anc_micbias = MBHC_MICBIAS2,
 	.mclk_cb_fn = msm_snd_enable_codec_ext_clk,
 	.mclk_rate = TOMTOM_EXT_CLK_RATE,
-	.gpio_level_insert = 1,
+	.gpio_level_insert = 0,
 	.detect_extn_cable = true,
 	.micbias_enable_flags = 1 << MBHC_MICBIAS_ENABLE_THRESHOLD_HEADSET,
 	.insert_detect = true,
@@ -285,8 +306,11 @@ static struct wcd9xxx_mbhc_config mbhc_cfg = {
 	.key_code[5] = 0,
 	.key_code[6] = 0,
 	.key_code[7] = 0,
+	.htc_headset_cfg.htc_headset_init = false,
+	.htc_headset_cfg.IsXaMotherboard = false,
 };
 #endif
+//htc audio --
 static struct afe_clk_cfg mi2s_tx_clk = {
 	AFE_API_VERSION_I2S_CONFIG,
 	Q6AFE_LPASS_IBIT_CLK_1_P536_MHZ,
@@ -320,8 +344,10 @@ static atomic_t tert_mi2s_rsc_ref, quat_mi2s_rsc_ref;
 static int tert_mi2s_sample_rate = SAMPLING_RATE_48KHZ;
 static int quat_mi2s_sample_rate = SAMPLING_RATE_48KHZ;
 static int tert_mi2s_bit_format = SNDRV_PCM_FORMAT_S16_LE;
-static int quat_mi2s_bit_format = SNDRV_PCM_FORMAT_S24_LE; 
+//static int quat_mi2s_bit_format = SNDRV_PCM_FORMAT_S16_LE;
+static int quat_mi2s_bit_format = SNDRV_PCM_FORMAT_S24_LE; //htc audio
 
+//htc audio ++
 #define msm8994_BRING_UP_OPTION (0)
 #define HTC_HS_AMP  0x1
 #define HTC_RCV_AMP 0x2
@@ -342,7 +368,10 @@ static void msm8994_liquid_ext_spk_power_amp_off(u32 spk);
 
 static int msm8994_get_hw_component(void)
 {
-	return (HTC_AUDIO_RT5501 | HTC_AUDIO_TFA9887 | HTC_AUDIO_TFA9887L);
+	if (of_property_read_bool(spdev->dev.of_node, "acadia-tfa9891-support"))
+		return 0;
+	else
+		return (HTC_AUDIO_RT5501 | HTC_AUDIO_TFA9887 | HTC_AUDIO_TFA9887L);
 }
 
 char* msm8994_get_mid(void)
@@ -381,14 +410,14 @@ int msm8994_enable_24b_audio(void)
 
 void msm8994_set_q6_effect_mode(int mode)
 {
-	pr_info("%s: mode %d\n", __func__, mode);
+	pr_debug("%s: mode %d\n", __func__, mode);
 	atomic_set(&q6_effect_mode, mode);
 }
 
 int msm8994_get_q6_effect_mode(void)
 {
 	int mode = atomic_read(&q6_effect_mode);
-	pr_info("%s: mode %d\n", __func__, mode);
+	pr_debug("%s: mode %d\n", __func__, mode);
 	return mode;
 }
 
@@ -401,6 +430,7 @@ static struct acoustic_ops acoustic = {
 	.enable_24b_audio = msm8994_enable_24b_audio
 };
 
+//htc audio --
 
 static inline int param_is_mask(int p)
 {
@@ -429,7 +459,7 @@ static irqreturn_t msm8994_audio_plug_device_irq_handler(int irq, void *dev)
 {
 	struct audio_plug_dev *dock_dev = dev;
 
-	
+	/* switch speakers should not run in interrupt context */
 	schedule_work(&dock_dev->irq_work);
 	return IRQ_HANDLED;
 }
@@ -443,7 +473,7 @@ static int msm8994_audio_plug_device_init
 {
 	int ret = 0;
 
-	
+	/* awaike by plug in device OR unplug one of them */
 	u32 plug_irq_flags = IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING;
 
 	audio_plug_dev =
@@ -495,7 +525,7 @@ static int msm8994_audio_plug_device_init
 	switch_set_state(&audio_plug_dev->audio_sdev,
 					!(audio_plug_dev->plug_det));
 
-	
+	/*notify to audio deamon*/
 	sysfs_notify(&audio_plug_dev->audio_sdev.dev->kobj,
 				NULL, "state");
 
@@ -544,7 +574,7 @@ static void msm8994_liquid_docking_irq_work(struct work_struct *work)
 		gpio_get_value(dock_dev->plug_gpio);
 
 	switch_set_state(&dock_dev->audio_sdev, dock_dev->plug_det);
-	
+	/*notify to audio deamon*/
 	sysfs_notify(&dock_dev->audio_sdev.dev->kobj, NULL, "state");
 }
 
@@ -553,7 +583,7 @@ static int msm8994_liquid_dock_notify_handler(struct notifier_block *this,
 					void *unused)
 {
 	int ret = 0;
-	
+	/* plug in docking speaker+plug in device OR unplug one of them */
 	u32 dock_plug_irq_flags = IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING |
 					IRQF_SHARED;
 	if (dock_event) {
@@ -584,7 +614,7 @@ static int msm8994_liquid_dock_notify_handler(struct notifier_block *this,
 
 		switch_set_state(&msm8994_liquid_dock_dev->audio_sdev,
 				msm8994_liquid_dock_dev->plug_det);
-		
+		/*notify to audio deamon*/
 		sysfs_notify(&msm8994_liquid_dock_dev->audio_sdev.dev->kobj,
 				NULL, "state");
 	} else {
@@ -659,7 +689,7 @@ static void apq8094_db_device_irq_work(struct work_struct *work)
 
 	switch_set_state(&plug_dev->audio_sdev, !(plug_dev->plug_det));
 
-	
+	/*notify to audio deamon*/
 	sysfs_notify(&plug_dev->audio_sdev.dev->kobj, NULL, "state");
 }
 
@@ -787,6 +817,7 @@ static void msm8994_ext_us_amp_enable(u32 on)
 			on ? "Enable" : "Disable");
 }
 
+//htc audio ++
 static int msm_ext_spkramp_event(struct snd_soc_dapm_widget *w,
 				 struct snd_kcontrol *k, int event)
 {
@@ -824,6 +855,7 @@ static int msm_ext_spkramp_event(struct snd_soc_dapm_widget *w,
 	}
 	return ret;
 }
+//htc audio --
 
 static int msm_ext_ultrasound_event(struct snd_soc_dapm_widget *w,
 			     struct snd_kcontrol *k, int event)
@@ -846,6 +878,7 @@ static int msm_ext_ultrasound_event(struct snd_soc_dapm_widget *w,
 	}
 	return 0;
 }
+//htc audio ++
 #if 0
 static void htc_hset_amp_ctl(int enable)
 {
@@ -873,10 +906,13 @@ static void htc_rcv_amp_ctl(int enable)
 
 	for(i = 0; i < ARRAY_SIZE(htc_rcv_config.gpio); i++) {
 
-		pr_info("%s: gpio = %d, gpio name = %s value %d\n", __func__,
-		htc_rcv_config.gpio[i].gpio_no, htc_rcv_config.gpio[i].gpio_name,value);
+		if(gpio_is_valid(htc_rcv_config.gpio[i].gpio_no))
+		{
+			pr_debug("%s: gpio = %d, gpio name = %s value %d\n", __func__,
+			htc_rcv_config.gpio[i].gpio_no, htc_rcv_config.gpio[i].gpio_name,value);
 
-		gpio_set_value(htc_rcv_config.gpio[i].gpio_no, value);
+			gpio_set_value(htc_rcv_config.gpio[i].gpio_no, value);
+		}
 	}
 
 }
@@ -970,6 +1006,7 @@ static void msm8994_liquid_ext_spk_power_amp_off(u32 spk)
 			__func__, spk);
 	}
 }
+//htc audio --
 static int msm_snd_enable_codec_ext_clk(struct snd_soc_codec *codec, int enable,
 					bool dapm)
 {
@@ -1028,21 +1065,73 @@ static int msm8994_mclk_event(struct snd_soc_dapm_widget *w,
 	}
 	return 0;
 }
+//htc audio ++
+#ifdef CONFIG_USE_CODEC_MBHC
+static int hs_qpnp_remote_adc(int *adc,unsigned int channel)
+{
+	struct qpnp_vadc_result result;
+	enum qpnp_vadc_channels chan;
+	static struct qpnp_vadc_chip *vadc_chip;
+	int err = 0;
 
+	vadc_chip = qpnp_get_vadc(&spdev->dev, "headset");
+
+	result.physical = -EINVAL;
+	chan = channel;
+	pr_debug("%s: pdata_chann %d\n", __func__, chan);
+	err = qpnp_vadc_read(vadc_chip, chan, &result);
+	if (err < 0) {
+		pr_err("%s: Read ADC fail, ret = %d\n", __func__, err);
+		return err;
+	}
+
+	*adc = (int) result.physical;
+	*adc = *adc / 1000; /* uA to mA */
+	pr_info("%s: Remote ADC %d (%#X)\n", __func__, *adc, *adc);
+	return 1;
+}
+
+static int msm_headset_lr_event(struct snd_soc_dapm_widget *w,
+				 struct snd_kcontrol *k, int event)
+{
+	int ret = 0;
+	pr_info("%s\n", __func__);
+	if (SND_SOC_DAPM_EVENT_ON(event)) {
+		if (gpio_get_value(mbhc_cfg.htc_headset_cfg.ext_micbias) != 1) {
+			gpio_set_value(mbhc_cfg.htc_headset_cfg.ext_micbias,1);
+			pr_info("%s: ext_micbias on\n",__func__);
+		}
+	} else {
+		if (gpio_get_value(mbhc_cfg.htc_headset_cfg.ext_micbias) != 0) {
+			gpio_set_value(mbhc_cfg.htc_headset_cfg.ext_micbias,0);
+			pr_info("%s: ext_micbias off\n",__func__);
+		}
+	}
+	return ret;
+}
+#endif
+//htc audio --
 static const struct snd_soc_dapm_widget msm8994_dapm_widgets[] = {
 
 	SND_SOC_DAPM_SUPPLY("MCLK",  SND_SOC_NOPM, 0, 0,
 	msm8994_mclk_event, SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+//htc audio ++
 	SND_SOC_DAPM_SPK("Lineout_1 amp", msm_ext_spkramp_event),
 	SND_SOC_DAPM_SPK("Lineout_3 amp", msm_ext_spkramp_event),
 
 	SND_SOC_DAPM_SPK("Lineout_2 amp", msm_ext_spkramp_event),
 	SND_SOC_DAPM_SPK("Lineout_4 amp", msm_ext_spkramp_event),
+//htc audio --
 	SND_SOC_DAPM_SPK("ultrasound amp", msm_ext_ultrasound_event),
 	SND_SOC_DAPM_MIC("Handset Mic", NULL),
 	SND_SOC_DAPM_MIC("Headset Mic", NULL),
+#ifdef CONFIG_USE_CODEC_MBHC //htc audio
+	SND_SOC_DAPM_MIC("ANCRight Headset Mic", msm_headset_lr_event),
+	SND_SOC_DAPM_MIC("ANCLeft Headset Mic", msm_headset_lr_event),
+#else
 	SND_SOC_DAPM_MIC("ANCRight Headset Mic", NULL),
 	SND_SOC_DAPM_MIC("ANCLeft Headset Mic", NULL),
+#endif
 	SND_SOC_DAPM_MIC("Analog Mic4", NULL),
 	SND_SOC_DAPM_MIC("Analog Mic5", NULL),
 	SND_SOC_DAPM_MIC("Analog Mic6", NULL),
@@ -1113,6 +1202,9 @@ static int slim0_rx_bit_format_get(struct snd_kcontrol *kcontrol,
 {
 
 	switch (slim0_rx_bit_format) {
+	case SNDRV_PCM_FORMAT_S24_3LE:
+		ucontrol->value.integer.value[0] = 2;
+		break;
 	case SNDRV_PCM_FORMAT_S24_LE:
 		ucontrol->value.integer.value[0] = 1;
 		break;
@@ -1134,6 +1226,9 @@ static int slim0_rx_bit_format_put(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
 {
 	switch (ucontrol->value.integer.value[0]) {
+	case 2:
+		slim0_rx_bit_format = SNDRV_PCM_FORMAT_S24_3LE;
+		break;
 	case 1:
 		slim0_rx_bit_format = SNDRV_PCM_FORMAT_S24_LE;
 		break;
@@ -1785,6 +1880,7 @@ err:
 	return ret;
 }
 
+//htc audio ++
 static int msm_wcd_get_pinctrl(struct platform_device *pdev, struct platform_device *pinpdev,
 							enum wcd_mux mux)
 {
@@ -1814,7 +1910,7 @@ static int msm_wcd_get_pinctrl(struct platform_device *pdev, struct platform_dev
 	}
 	pinctrl_info->pinctrl = pinctrl;
 
-	
+	/* get all the states handles from Device Tree */
 	pinctrl_info->disable = pinctrl_lookup_state(pinctrl,
 						"wcd_clk2-sleep");
 	if (IS_ERR(pinctrl_info->disable)) {
@@ -1830,7 +1926,7 @@ static int msm_wcd_get_pinctrl(struct platform_device *pdev, struct platform_dev
 		goto err;
 	}
 
-	
+	/* Reset the AUXPCM TLMM pins to a default state */
 	ret = pinctrl_select_state(pinctrl_info->pinctrl,
 					pinctrl_info->active);
 	if (ret != 0) {
@@ -1883,7 +1979,7 @@ static int ftm_auxpcm_get_pinctrl(struct platform_device *pdev)
 	}
 	pinctrl_info->pinctrl = pinctrl;
 
-	
+	/* get all the states handles from Device Tree */
 	pinctrl_info->disable = pinctrl_lookup_state(pinctrl,
 						"ftm-auxpcm-sleep");
 	if (IS_ERR(pinctrl_info->disable)) {
@@ -1898,7 +1994,7 @@ static int ftm_auxpcm_get_pinctrl(struct platform_device *pdev)
 		goto err;
 	}
 
-	
+	/* Reset the AUXPCM TLMM pins to a active state */
 	ret = pinctrl_select_state(pinctrl_info->pinctrl,
 					pinctrl_info->active);
 	if (ret != 0) {
@@ -1916,6 +2012,7 @@ err:
 	pinctrl_info->pinctrl = NULL;
 	return -EINVAL;
 }
+//htc audio --
 
 static void msm_auxpcm_release_pinctrl(struct platform_device *pdev,
 				enum mi2s_pcm_mux mux)
@@ -1969,7 +2066,7 @@ static int msm_auxpcm_get_pinctrl(struct platform_device *pdev,
 	}
 	pinctrl_info->pinctrl = pinctrl;
 
-	
+	/* get all the states handles from Device Tree */
 	pinctrl_info->disable = pinctrl_lookup_state(pinctrl,
 						"auxpcm-sleep");
 	if (IS_ERR(pinctrl_info->disable)) {
@@ -1985,7 +2082,7 @@ static int msm_auxpcm_get_pinctrl(struct platform_device *pdev,
 		goto err;
 	}
 
-	
+	/* Reset the AUXPCM TLMM pins to a default state */
 	ret = pinctrl_select_state(pinctrl_info->pinctrl,
 					pinctrl_info->disable);
 	if (ret != 0) {
@@ -2118,12 +2215,12 @@ static int msm_mi2s_get_pinctrl(struct platform_device *pdev, struct platform_de
 	struct msm8994_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	struct msm_pinctrl_info *pinctrl_info = NULL;
 	struct pinctrl *pinctrl;
-#if 0 
+#if 0 //htc audio: mark this for audio resume time issue
 	struct resource	*muxsel;
 #endif
 	char *const mi2s_sleep_state[] =  {"pri_mi2s_sleep", "sec_mi2s_sleep", "tert_mi2s_sleep", "quat_mi2s_sleep" };
 	char *const mi2s_active_state[] = {"pri_mi2s_active", "sec_mi2s_active", "tert_mi2s_active", "quat_mi2s_active" };
-#if 0 
+#if 0 //htc audio: mark this for audio resume time issue
 	char *const mi2s_lpaif_muxsel[] = {"lpaif_pri_mode_muxsel", "lpaif_sec_mode_muxsel", "lpaif_tert_mode_muxsel", "lpaif_quat_mode_muxsel" };
 #endif
 	int ret;
@@ -2158,7 +2255,7 @@ static int msm_mi2s_get_pinctrl(struct platform_device *pdev, struct platform_de
 	}
 	pinctrl_info->pinctrl = pinctrl;
 
-	
+	/* get all the states handles from Device Tree */
 	pinctrl_info->disable = pinctrl_lookup_state(pinctrl, mi2s_sleep_state[mux]);
 	if (IS_ERR(pinctrl_info->disable)) {
 		pr_err("%s: could not get disable pinstate\n", __func__);
@@ -2172,7 +2269,7 @@ static int msm_mi2s_get_pinctrl(struct platform_device *pdev, struct platform_de
 		goto err;
 	}
 
-	
+	/* Reset the MI2S TLMM pins to a default state */
 	ret = pinctrl_select_state(pinctrl_info->pinctrl,
 					pinctrl_info->disable);
 	if (ret != 0) {
@@ -2183,7 +2280,7 @@ static int msm_mi2s_get_pinctrl(struct platform_device *pdev, struct platform_de
 	}
 	pinctrl_info->curr_state = STATE_DISABLE;
 
-#if 0 
+#if 0 //htc audio: mark this for audio resume time issue
 	muxsel = platform_get_resource_byname(pdev, IORESOURCE_MEM, mi2s_lpaif_muxsel[mux]);
 	if (!muxsel) {
 		dev_err(&pdev->dev, "MUX addr invalid for MI2S\n");
@@ -2229,7 +2326,7 @@ static int msm8994_mi2s_snd_startup(struct snd_pcm_substream *substream)
 	struct msm8994_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	struct msm_pinctrl_info *pinctrl_info = &pdata->pri_mi2s_pinctrl_info;
 
-	pr_info("%s: substream = %s  stream = %d\n", __func__,
+	pr_debug("%s: substream = %s  stream = %d\n", __func__,
 		substream->name, substream->stream);
 
 	if (pinctrl_info == NULL) {
@@ -2298,7 +2395,7 @@ static int msm8994_tert_mi2s_snd_startup(struct snd_pcm_substream *substream)
 	struct msm8994_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	struct msm_pinctrl_info *pinctrl_info = &pdata->tert_mi2s_pinctrl_info;
 
-	pr_info("%s: dai name %s %p  substream = %s  stream = %d bit width =%d sample rate =%d  \n", __func__, cpu_dai->name, cpu_dai->dev,substream->name, 
+	pr_info("%s: dai name %s %pK  substream = %s  stream = %d bit width =%d sample rate =%d  \n", __func__, cpu_dai->name, cpu_dai->dev,substream->name,
 			substream->stream, tert_mi2s_bit_format, tert_mi2s_sample_rate);
 
 	if (atomic_inc_return(&tert_mi2s_rsc_ref) == 1) {
@@ -2394,7 +2491,7 @@ static void msm8994_tert_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 	struct msm_pinctrl_info *pinctrl_info = &pdata->tert_mi2s_pinctrl_info;
 	int ret = 0;
 
-	pr_info("%s: dai name %s %p  substream = %s  stream = %d  \n", __func__, cpu_dai->name, cpu_dai->dev,substream->name, substream->stream);
+	pr_info("%s: dai name %s %pK  substream = %s  stream = %d  \n", __func__, cpu_dai->name, cpu_dai->dev,substream->name, substream->stream);
 	if (atomic_dec_return(&tert_mi2s_rsc_ref) == 0) {
 
 		tert_mi2s_clk.clk_val1 = Q6AFE_LPASS_IBIT_CLK_DISABLE;
@@ -2406,7 +2503,7 @@ static void msm8994_tert_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 
 		ret = msm_reset_pinctrl(pinctrl_info);
 		if (ret) pr_err("%s: Reset pinctrl failed with %d\n", __func__, ret);
-		pr_info("%s Tertiary MI2S Clock is Disabled", __func__);
+		pr_debug("%s Tertiary MI2S Clock is Disabled", __func__);
 	}
 }
 
@@ -2420,7 +2517,7 @@ static int msm8994_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
 	struct msm8994_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	struct msm_pinctrl_info *pinctrl_info = &pdata->quat_mi2s_pinctrl_info;
 
-	pr_info("%s: dai name %s %p  substream = %s  stream = %d bit width =%d sample rate =%d  \n", __func__, cpu_dai->name, cpu_dai->dev,substream->name, 
+	pr_info("%s: dai name %s %pK  substream = %s  stream = %d bit width =%d sample rate =%d  \n", __func__, cpu_dai->name, cpu_dai->dev,substream->name,
 			substream->stream, quat_mi2s_bit_format, quat_mi2s_sample_rate);
 
 	if (atomic_inc_return(&quat_mi2s_rsc_ref) == 1) {
@@ -2513,7 +2610,7 @@ static void msm8994_quat_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 	struct msm_pinctrl_info *pinctrl_info = &pdata->quat_mi2s_pinctrl_info;
 	int ret = 0;
 
-	pr_info("%s: dai name %s %p  substream = %s  stream = %d  \n", __func__, cpu_dai->name, cpu_dai->dev,substream->name, substream->stream);
+	pr_info("%s: dai name %s %pK  substream = %s  stream = %d  \n", __func__, cpu_dai->name, cpu_dai->dev,substream->name, substream->stream);
 	if (atomic_dec_return(&quat_mi2s_rsc_ref) == 0) {
 
 		quat_mi2s_clk.clk_val1 = Q6AFE_LPASS_IBIT_CLK_DISABLE;
@@ -2525,7 +2622,7 @@ static void msm8994_quat_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 
 		ret = msm_reset_pinctrl(pinctrl_info);
 		if (ret) pr_err("%s: Reset pinctrl failed with %d\n", __func__, ret);
-		pr_info("%s Quaternary MI2S Clock is Disabled", __func__);
+		pr_debug("%s Quaternary MI2S Clock is Disabled", __func__);
 	}
 }
 
@@ -2589,10 +2686,12 @@ static int msm_slim_0_rx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 	pr_debug("%s()\n", __func__);
 	param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT,
 				   slim0_rx_bit_format);
+//htc audio ++
         if(htc_acoustic_query_feature(HTC_AUD_24BIT)) {
                 param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT,
                         SNDRV_PCM_FORMAT_S24_LE);
         }
+//htc audio --
 	rate->min = rate->max = slim0_rx_sample_rate;
 	channels->min = channels->max = msm_slim_0_rx_ch;
 
@@ -2695,7 +2794,7 @@ static const struct soc_enum msm_snd_enum[] = {
 	SOC_ENUM_SINGLE_EXT(2, slim0_rx_ch_text),
 	SOC_ENUM_SINGLE_EXT(8, slim0_tx_ch_text),
 	SOC_ENUM_SINGLE_EXT(7, hdmi_rx_ch_text),
-	SOC_ENUM_SINGLE_EXT(2, rx_bit_format_text),
+	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(rx_bit_format_text), rx_bit_format_text),
 	SOC_ENUM_SINGLE_EXT(3, slim0_rx_sample_rate_text),
 	SOC_ENUM_SINGLE_EXT(8, proxy_rx_ch_text),
 	SOC_ENUM_SINGLE_EXT(3, hdmi_rx_sample_rate_text),
@@ -2743,13 +2842,14 @@ static const struct snd_kcontrol_new msm_snd_controls[] = {
 			slim0_tx_sample_rate_get, slim0_tx_sample_rate_put),
 
 };
-#ifdef USE_CODEC_MBHC
+#ifdef CONFIG_USE_CODEC_MBHC //htc_audio
+//htc_audio: we don't use below
 static bool msm8994_swap_gnd_mic(struct snd_soc_codec *codec)
 {
 	struct snd_soc_card *card = codec->card;
 	struct msm8994_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	int value = gpio_get_value_cansleep(pdata->us_euro_gpio);
-	pr_debug("%s: swap select switch %d to %d\n", __func__, value, !value);
+	pr_info("%s: swap select switch %d to %d\n", __func__, value, !value);
 	gpio_set_value_cansleep(pdata->us_euro_gpio, !value);
 	return true;
 }
@@ -2853,9 +2953,22 @@ static int msm_snd_get_ext_clk_cnt(void)
 	return clk_users;
 }
 
-static int msm_htc_amp_get(struct snd_kcontrol *kcontrol,
+//htc audio ++
+static int msm_rcv_amp_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
+	mutex_lock(&htc_amp_mutex);
+	ucontrol->value.integer.value[0] = (htc_amp_mask & HTC_RCV_AMP)?1:0;
+	mutex_unlock(&htc_amp_mutex);
+	return 0;
+}
+
+static int msm_hs_amp_get(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	mutex_lock(&htc_amp_mutex);
+	ucontrol->value.integer.value[0] = (htc_amp_mask & HTC_HS_AMP)?1:0;
+	mutex_unlock(&htc_amp_mutex);
 	return 0;
 }
 
@@ -2945,7 +3058,7 @@ static int msm_audiosphere_enable_put(struct snd_kcontrol *kcontrol,
 	int rc;
 
 	mutex_lock(&htc_audiosphere_enable_mutex);
-	pr_info("%s\n", __func__);
+	pr_debug("%s\n", __func__);
 
 	if ((ucontrol->value.integer.value[0] == 0) || (ucontrol->value.integer.value[0] == 1))
 		enable_flag = ucontrol->value.integer.value[0];
@@ -2967,7 +3080,7 @@ static int msm_audiosphere_strength_put(struct snd_kcontrol *kcontrol,
 	int rc;
 
 	mutex_lock(&htc_audiosphere_strength_mutex);
-	pr_info("%s\n", __func__);
+	pr_debug("%s\n", __func__);
 
 	if ((ucontrol->value.integer.value[0] >= 0) && ((ucontrol->value.integer.value[0] <= 1000)))
 		strength = ucontrol->value.integer.value[0];
@@ -2989,7 +3102,7 @@ static int msm_audiospherelimit_enable_put(struct snd_kcontrol *kcontrol,
 	int rc;
 
 	mutex_lock(&htc_audiosphere_enable_mutex);
-	pr_info("%s\n", __func__);
+	pr_debug("%s\n", __func__);
 
 	if ((ucontrol->value.integer.value[0] == 0) || (ucontrol->value.integer.value[0] == 1))
 		enable_flag = ucontrol->value.integer.value[0];
@@ -3016,7 +3129,7 @@ static int msm_speaker_reverse_put(struct snd_kcontrol *kcontrol,
 	int rc;
 
 	mutex_lock(&htc_audiosphere_enable_mutex);
-	pr_info("%s\n", __func__);
+	pr_debug("%s\n", __func__);
 
 	if ((ucontrol->value.integer.value[0] == 0) || (ucontrol->value.integer.value[0] == 1))
 		enable_flag = ucontrol->value.integer.value[0];
@@ -3034,7 +3147,7 @@ static int msm_speaker_reverse_put(struct snd_kcontrol *kcontrol,
 static int htc_mi2s_amp_event(struct snd_soc_dapm_widget *w,
 			     struct snd_kcontrol *k, int event)
 {
-	pr_info("%s() %s\n", __func__,w->name);
+	pr_debug("%s() %s\n", __func__,w->name);
 
 	if (SND_SOC_DAPM_EVENT_ON(event)) {
 		pr_info("%s:mi2s amp on\n",__func__);
@@ -3052,10 +3165,10 @@ static int htc_mi2s_amp_event(struct snd_soc_dapm_widget *w,
 
 static const struct snd_kcontrol_new htc_amp_siwth_control[] = {
 	SOC_SINGLE_EXT("RCV AMP EN Switch", SND_SOC_NOPM,
-	0, 1, 0, msm_htc_amp_get,msm_rcv_amp_put),
+	0, 1, 0, msm_rcv_amp_get,msm_rcv_amp_put),
 
 	SOC_SINGLE_EXT("HS AMP EN Switch", SND_SOC_NOPM,
-	0, 1, 0, msm_htc_amp_get,msm_hs_amp_put),
+	0, 1, 0, msm_hs_amp_get,msm_hs_amp_put),
 };
 
 static const struct snd_kcontrol_new htc_audiosphere_params_control[] = {
@@ -3084,7 +3197,7 @@ static const struct snd_soc_dapm_widget htc_quat_mi2s_widget[] = {
 };
 
 static const struct snd_soc_dapm_route htc_quat_mi2s_virtual_route[] = {
-	
+	/* SLIMBUS Connections */
 	{"HTC_MI2S_OUT", NULL, "HTC VIRTUAL MI2S"},
 };
 
@@ -3103,6 +3216,7 @@ static int msm_htc_quat_mi2s_init(struct snd_soc_pcm_runtime *rtd)
 
 	return 0;
 }
+//htc audio --
 static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 {
 	int err;
@@ -3112,6 +3226,11 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 
+	/* Codec SLIMBUS configuration
+	 * RX1, RX2, RX3, RX4, RX5, RX6, RX7, RX8, RX9, RX10, RX11, RX12, RX13
+	 * TX1, TX2, TX3, TX4, TX5, TX6, TX7, TX8, TX9, TX10, TX11, TX12, TX13
+	 * TX14, TX15, TX16
+	 */
 	unsigned int rx_ch[TOMTOM_RX_MAX] = {144, 145, 146, 147, 148, 149, 150,
 					    151, 152, 153, 154, 155, 156};
 	unsigned int tx_ch[TOMTOM_TX_MAX]  = {128, 129, 130, 131, 132, 133,
@@ -3137,6 +3256,7 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 		return err;
 	}
 
+//htc audio ++
 	err = snd_soc_add_codec_controls(codec, htc_amp_siwth_control,
 					 ARRAY_SIZE(htc_amp_siwth_control));
 	if (err < 0)
@@ -3151,14 +3271,15 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 					 ARRAY_SIZE(htc_speaker_reverse_params_control));
 	if (err < 0)
 		return err;
+//htc audio --
 
 	err = msm8994_ext_us_amp_init();
 	if (err) {
 		pr_err("%s: MTP 8994 US Emitter GPIO init failed (%d)\n",
 			__func__, err);
-		
-		
-		
+		// htc audio: When feature not supported and GPIO removed in DT,
+		//            Do not report error here.
+		//return err;
 	}
 
 	snd_soc_dapm_new_controls(dapm, msm8994_dapm_widgets,
@@ -3257,8 +3378,9 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 			goto out;
 		}
 	}
-#ifdef USE_CODEC_MBHC
-	
+//htc audio ++
+#ifdef CONFIG_USE_CODEC_MBHC
+	/* start mbhc */
 	mbhc_cfg.calibration = def_codec_mbhc_cal();
 	if (mbhc_cfg.calibration) {
 		err = tomtom_hs_detect(codec, &mbhc_cfg);
@@ -3280,7 +3402,7 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 		pr_err("%s: Failed to register adsp state notifier\n",
 		       __func__);
 		err = -EFAULT;
-#ifdef USE_CODEC_MBHC
+#ifdef CONFIG_USE_CODEC_MBHC //htc_audio
 		tomtom_hs_detect_exit(codec);
 #endif
 		goto out;
@@ -3311,7 +3433,8 @@ out:
 	return err;
 }
 
-#ifdef USE_CODEC_MBHC
+//htc audio ++
+#ifdef CONFIG_USE_CODEC_MBHC
 static void *def_codec_mbhc_cal(void)
 {
 	void *codec_cal;
@@ -3390,6 +3513,7 @@ static void *def_codec_mbhc_cal(void)
 	return codec_cal;
 }
 #endif
+//htc audio --
 static int msm_snd_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_pcm_hw_params *params)
 {
@@ -3430,13 +3554,17 @@ static int msm_snd_hw_params(struct snd_pcm_substream *substream,
 				__func__, ret);
 			goto end;
 		}
-		
+		/* For <codec>_tx1 case */
 		if (dai_link->be_id == MSM_BACKEND_DAI_SLIMBUS_0_TX)
 			user_set_tx_ch = msm_slim_0_tx_ch;
-		
+		/* For <codec>_tx2 case */
 		else if (dai_link->be_id == MSM_BACKEND_DAI_SLIMBUS_1_TX)
 			user_set_tx_ch = params_channels(params);
 		else if (dai_link->be_id == MSM_BACKEND_DAI_SLIMBUS_3_TX)
+			/* DAI 5 is used for external EC reference from codec.
+			 * Since Rx is fed as reference for EC, the config of
+			 * this DAI is based on that of the Rx path.
+			 */
 			user_set_tx_ch = msm_slim_0_rx_ch;
 		else if (dai_link->be_id == MSM_BACKEND_DAI_SLIMBUS_4_TX)
 			user_set_tx_ch = msm_vi_feed_tx_ch;
@@ -3521,8 +3649,9 @@ static struct snd_soc_ops msm8994_slimbus_2_be_ops = {
 	.hw_params = msm8994_slimbus_2_hw_params,
 };
 
+/* Digital audio interface glue - connects codec <---> CPU */
 static struct snd_soc_dai_link msm8994_common_dai_links[] = {
-	
+	/* FrontEnd DAI Links */
 	{
 		.name = "MSM8994 Media1",
 		.stream_name = "MultiMedia1",
@@ -3535,7 +3664,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA1
 	},
@@ -3550,7 +3679,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.trigger = {SND_SOC_DPCM_TRIGGER_POST,
 			SND_SOC_DPCM_TRIGGER_POST},
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA2,
 	},
@@ -3566,7 +3695,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_CS_VOICE,
 	},
@@ -3581,7 +3710,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_VOIP,
 	},
@@ -3596,11 +3725,11 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA3,
 	},
-	
+	/* Hostless PCM purpose */
 	{
 		.name = "SLIMBUS_0 Hostless",
 		.stream_name = "SLIMBUS_0 Hostless",
@@ -3611,7 +3740,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1, 
+		.ignore_pmdown_time = 1, /* dai link has playback support */
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 	},
@@ -3625,7 +3754,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
@@ -3638,7 +3767,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_dai_name = "msm-stub-rx",
 		.platform_name = "msm-pcm-afe",
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 	},
 	{
@@ -3662,7 +3791,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA4,
 	},
 	{
@@ -3675,7 +3804,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
@@ -3690,7 +3819,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1, 
+		.ignore_pmdown_time = 1, /* dai link has playback support */
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 	},
@@ -3704,7 +3833,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1, 
+		.ignore_pmdown_time = 1, /* dai link has playback support */
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 	},
@@ -3718,7 +3847,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1, 
+		.ignore_pmdown_time = 1, /* dai link has playback support */
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 	},
@@ -3732,7 +3861,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
@@ -3750,7 +3879,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.trigger = {SND_SOC_DPCM_TRIGGER_POST,
 				SND_SOC_DPCM_TRIGGER_POST},
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA5,
 	},
@@ -3769,7 +3898,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.be_id = MSM_FRONTEND_DAI_LSM1,
 	},
-	
+	/* Multiple Tunnel instances */
 	{
 		.name = "MSM8994 Compress2",
 		.stream_name = "Compress2",
@@ -3782,7 +3911,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA7,
 	},
 	{
@@ -3797,7 +3926,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA10,
 	},
 	{
@@ -3812,7 +3941,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA8,
 	},
 	{
@@ -3825,13 +3954,13 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 		.be_id = MSM_FRONTEND_DAI_QCHAT,
 	},
-	
+	/* HDMI Hostless */
 	{
 		.name = "HDMI_RX_HOSTLESS",
 		.stream_name = "HDMI_RX_HOSTLESS",
@@ -3856,7 +3985,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
@@ -3872,7 +4001,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
@@ -3889,7 +4018,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.ignore_suspend = 1,
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA6,
 	},
@@ -3906,7 +4035,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
 	},
-	
+	/* Ultrasound RX DAI Link */
 	{
 		.name = "SLIMBUS_2 Hostless Playback",
 		.stream_name = "SLIMBUS_2 Hostless Playback",
@@ -3918,7 +4047,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ops = &msm8994_slimbus_2_be_ops,
 	},
-	
+	/* Ultrasound TX DAI Link */
 	{
 		.name = "SLIMBUS_2 Hostless Capture",
 		.stream_name = "SLIMBUS_2 Hostless Capture",
@@ -3930,7 +4059,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ops = &msm8994_slimbus_2_be_ops,
 	},
-	
+	/* LSM FE */
 	{
 		.name = "Listen 2 Audio Service",
 		.stream_name = "Listen 2 Audio Service",
@@ -4047,7 +4176,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA9,
 	},
@@ -4078,7 +4207,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA11,
 	},
 	{
@@ -4093,7 +4222,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA12,
 	},
 	{
@@ -4108,7 +4237,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA13,
 	},
 	{
@@ -4123,7 +4252,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA14,
 	},
 	{
@@ -4138,7 +4267,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA15,
 	},
 	{
@@ -4153,10 +4282,10 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-		 
+		 /* this dainlink has playback support */
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA16,
 	},
-	
+	/* CPE LSM direct dai-link */
 	{
 		.name = "CPE Listen service",
 		.stream_name = "CPE Listen Audio Service",
@@ -4184,8 +4313,8 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA3,
 	},
-	
-	
+	/* End of FE DAI LINK */
+	/* Backend FM DAI Links */
 	{
 		.name = LPASS_BE_INT_FM_RX,
 		.stream_name = "Internal FM Playback",
@@ -4196,7 +4325,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.no_pcm = 1,
 		.be_id = MSM_BACKEND_DAI_INT_FM_RX,
 		.be_hw_params_fixup = msm_be_fm_hw_params_fixup,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.ignore_suspend = 1,
 	},
@@ -4212,7 +4341,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_hw_params_fixup = msm_be_hw_params_fixup,
 		.ignore_suspend = 1,
 	},
-	
+	/* Backend AFE DAI Links */
 	{
 		.name = LPASS_BE_AFE_PCM_RX,
 		.stream_name = "AFE Playback",
@@ -4223,7 +4352,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.no_pcm = 1,
 		.be_id = MSM_BACKEND_DAI_AFE_PCM_RX,
 		.be_hw_params_fixup = msm_proxy_rx_be_hw_params_fixup,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.ignore_suspend = 1,
 	},
@@ -4239,8 +4368,9 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_hw_params_fixup = msm_proxy_tx_be_hw_params_fixup,
 		.ignore_suspend = 1,
 	},
+//htc audio ++
 #if 0
-	
+	/* Primary AUX PCM Backend DAI Links */
 	{
 		.name = LPASS_BE_AUXPCM_RX,
 		.stream_name = "AUX PCM Playback",
@@ -4253,7 +4383,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_hw_params_fixup = msm_auxpcm_be_params_fixup,
 		.ignore_pmdown_time = 1,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 	},
 	{
 		.name = LPASS_BE_AUXPCM_TX,
@@ -4268,7 +4398,8 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.ignore_suspend = 1,
 	},
 #endif
-	
+//htc audio --
+	/* Secondary AUX PCM Backend DAI Links */
 	{
 		.name = LPASS_BE_SEC_AUXPCM_RX,
 		.stream_name = "Sec AUX PCM Playback",
@@ -4282,7 +4413,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.ops = &msm_sec_auxpcm_be_ops,
 		.ignore_pmdown_time = 1,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 	},
 	{
 		.name = LPASS_BE_SEC_AUXPCM_TX,
@@ -4298,7 +4429,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.ignore_suspend = 1,
 	},
 
-	
+	/* Backend DAI Links */
 	{
 		.name = LPASS_BE_SLIMBUS_0_RX,
 		.stream_name = "Slimbus Playback",
@@ -4310,7 +4441,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_id = MSM_BACKEND_DAI_SLIMBUS_0_RX,
 		.init = &msm_audrx_init,
 		.be_hw_params_fixup = msm_slim_0_rx_be_hw_params_fixup,
-		.ignore_pmdown_time = 1, 
+		.ignore_pmdown_time = 1, /* dai link has playback support */
 		.ignore_suspend = 1,
 		.ops = &msm8994_be_ops,
 	},
@@ -4339,7 +4470,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_id = MSM_BACKEND_DAI_SLIMBUS_1_RX,
 		.be_hw_params_fixup = msm_slim_0_rx_be_hw_params_fixup,
 		.ops = &msm8994_be_ops,
-		
+		/* dai link has playback support */
 		.ignore_pmdown_time = 1,
 		.ignore_suspend = 1,
 	},
@@ -4367,7 +4498,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_id = MSM_BACKEND_DAI_SLIMBUS_3_RX,
 		.be_hw_params_fixup = msm_slim_0_rx_be_hw_params_fixup,
 		.ops = &msm8994_be_ops,
-		
+		/* dai link has playback support */
 		.ignore_pmdown_time = 1,
 		.ignore_suspend = 1,
 	},
@@ -4395,11 +4526,11 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_id = MSM_BACKEND_DAI_SLIMBUS_4_RX,
 		.be_hw_params_fixup = msm_slim_0_rx_be_hw_params_fixup,
 		.ops = &msm8994_be_ops,
-		
+		/* dai link has playback support */
 		.ignore_pmdown_time = 1,
 		.ignore_suspend = 1,
 	},
-	
+	/* Incall Record Uplink BACK END DAI Link */
 	{
 		.name = LPASS_BE_INCALL_RECORD_TX,
 		.stream_name = "Voice Uplink Capture",
@@ -4412,7 +4543,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_hw_params_fixup = msm_be_hw_params_fixup,
 		.ignore_suspend = 1,
 	},
-	
+	/* Incall Record Downlink BACK END DAI Link */
 	{
 		.name = LPASS_BE_INCALL_RECORD_RX,
 		.stream_name = "Voice Downlink Capture",
@@ -4425,7 +4556,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_hw_params_fixup = msm_be_hw_params_fixup,
 		.ignore_suspend = 1,
 	},
-	
+	/* MAD BE */
 	{
 		.name = LPASS_BE_SLIMBUS_5_TX,
 		.stream_name = "Slimbus5 Capture",
@@ -4439,7 +4570,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.ignore_suspend = 1,
 		.ops = &msm8994_be_ops,
 	},
-	
+	/* Incall Music BACK END DAI Link */
 	{
 		.name = LPASS_BE_VOICE_PLAYBACK_TX,
 		.stream_name = "Voice Farend Playback",
@@ -4452,7 +4583,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.be_hw_params_fixup = msm_be_hw_params_fixup,
 		.ignore_suspend = 1,
 	},
-	
+	/* Incall Music 2 BACK END DAI Link */
 	{
 		.name = LPASS_BE_VOICE2_PLAYBACK_TX,
 		.stream_name = "Voice2 Farend Playback",
@@ -4510,11 +4641,11 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.cpu_dai_name = "msm-dai-q6-mi2s.3",
 		.platform_name = "msm-pcm-routing",
 		.codec_name = "msm-stub-codec.1",
-		.codec_dai_name = "msm_htc_mi2s_codec", 
+		.codec_dai_name = "msm_htc_mi2s_codec", //htc audio
 		.no_pcm = 1,
 		.be_id = MSM_BACKEND_DAI_QUATERNARY_MI2S_RX,
 		.be_hw_params_fixup = msm_be_quat_mi2s_hw_params_fixup,
-		.init = &msm_htc_quat_mi2s_init,  
+		.init = &msm_htc_quat_mi2s_init,  //htc audio
 		.ops = &msm8994_quat_mi2s_be_ops,
 		.ignore_suspend = 1,
 	},
@@ -4541,7 +4672,7 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
@@ -4556,12 +4687,13 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 			SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		
+		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 	},
 
+//htc audio ++: add for open_dummy_stream() at AHAL
 	{
 		.name = "Compress Stub",
 		.stream_name = "Compress Stub",
@@ -4571,15 +4703,17 @@ static struct snd_soc_dai_link msm8994_common_dai_links[] = {
 		.trigger = {SND_SOC_DPCM_TRIGGER_POST, SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1, 
+		.ignore_pmdown_time = 1, /* this dailink has playback support */
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 	},
+//htc audio --
 
 
 };
 
 static struct snd_soc_dai_link msm8994_hdmi_dai_link[] = {
+/* HDMI BACK END DAI Link */
 	{
 		.name = LPASS_BE_HDMI,
 		.stream_name = "HDMI Playback",
@@ -4603,18 +4737,21 @@ struct snd_soc_card snd_soc_card_msm8994 = {
 	.name		= "msm8994-tomtom-snd-card",
 };
 
+//htc audio ++
+//Enable hset bias for bring up
 #if MSM8994_BRINGUP
 static int msm8994_enable_hset_bias(struct snd_soc_card *card)
 {
 	struct msm8994_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	int ret;
 
-	
+	//Enable LED_3V3
 	if (pdata->led_gpio) {
 		ret = gpio_request(pdata->led_gpio, "TOMTOM_CODEC_LED3V3");
 		if (ret) {
 			pr_err("%s: Failed to request led-pio %d ret %d\n",
 				__func__, pdata->led_gpio,ret);
+//			return ret;
 		} else
 			pr_info("%s: Request led_gpio %d ret %d\n",
 				__func__, pdata->led_gpio,ret);
@@ -4629,6 +4766,7 @@ static int msm8994_enable_hset_bias(struct snd_soc_card *card)
 		if (ret) {
 			pr_err("%s: Failed to request hset bias gpio %d ret %d\n",
 				__func__, pdata->hset_bias_gpio,ret);
+//			return ret;
 		} else
 			pr_info("%s: Request hset bias gpio %d ret %d\n",
 				__func__, pdata->hset_bias_gpio,ret);
@@ -4648,12 +4786,13 @@ static int msm8994_enable_hph(struct snd_soc_card *card)
 	struct msm8994_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	int ret;
 
-	
+	//Enable hph en gpio, otherwise AKM will hold I2C bus then cause I2C bus error
 	if (pdata->hph_en_gpio) {
 		ret = gpio_request(pdata->hph_en_gpio, "TOMTOM_CODEC_HPH_EN");
 		if (ret) {
 			pr_err("%s: Failed to request hph_en_gpio %d ret %d\n",
 				__func__, pdata->hph_en_gpio,ret);
+//			return ret;
 		} else
 			pr_info("%s: Request hph_en_gpio %d ret %d\n",
 				__func__, pdata->hph_en_gpio,ret);
@@ -4672,6 +4811,7 @@ int msm8994_hph_en_ready(void)
 }
 EXPORT_SYMBOL(msm8994_hph_en_ready);
 #endif
+// htc audio --
 
 static int msm8994_populate_dai_link_component_of_node(
 					struct snd_soc_card *card)
@@ -4690,7 +4830,7 @@ static int msm8994_populate_dai_link_component_of_node(
 		if (dai_link[i].platform_of_node && dai_link[i].cpu_of_node)
 			continue;
 
-		
+		/* populate platform_of_node for snd card dai links */
 		if (dai_link[i].platform_name &&
 		    !dai_link[i].platform_of_node) {
 			index = of_property_match_string(cdev->of_node,
@@ -4715,7 +4855,7 @@ static int msm8994_populate_dai_link_component_of_node(
 			dai_link[i].platform_name = NULL;
 		}
 
-		
+		/* populate cpu_of_node for snd card dai links */
 		if (dai_link[i].cpu_dai_name && !dai_link[i].cpu_of_node) {
 			index = of_property_match_string(cdev->of_node,
 						 "asoc-cpu-names",
@@ -4735,7 +4875,7 @@ static int msm8994_populate_dai_link_component_of_node(
 			}
 		}
 
-		
+		/* populate codec_of_node for snd card dai links */
 		if (dai_link[i].codec_name && !dai_link[i].codec_of_node) {
 			index = of_property_match_string(cdev->of_node,
 						 "asoc-codec-names",
@@ -4775,7 +4915,8 @@ static int msm8994_prepare_codec_mclk(struct snd_soc_card *card)
 
 	return 0;
 }
-
+//htc audio ++
+#ifndef CONFIG_USE_CODEC_MBHC
 static int msm8994_prepare_us_euro(struct snd_soc_card *card)
 {
 	struct msm8994_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
@@ -4794,6 +4935,8 @@ static int msm8994_prepare_us_euro(struct snd_soc_card *card)
 
 	return 0;
 }
+#endif
+
 #if 0
 static int msm8994_dtparse_hset_amp(struct platform_device *pdev,
 				struct hset_amp_config *pconfig)
@@ -4990,13 +5133,13 @@ static int msm8994_dtparse_rcv(struct platform_device *pdev,
 		if(!gpio_is_valid(pconfig->gpio[i].gpio_no)) {
 
 			pr_err("%s: rcv get gpio %s fail\n",__func__,pconfig->gpio[i].gpio_name);
-			return 0;
+			continue;//Acadia only uses one gpio(rcv-gpio-en)
 		} else
 			pr_info("%s: rcv gpio %s no %d\n",__func__,pconfig->gpio[i].gpio_name,pconfig->gpio[i].gpio_no);
 
 		ret = gpio_request(pconfig->gpio[i].gpio_no, pconfig->gpio[i].gpio_name);
 		if (ret) {
-			pr_err(	"%s: Failed to request gpio %d error %d\n",
+			pr_err("%s: Failed to request gpio %d error %d\n",
 				__func__, pconfig->gpio[i].gpio_no, ret);
 #if 0
 			for(--i; i >= 0; i--)
@@ -5013,17 +5156,245 @@ static int msm8994_dtparse_rcv(struct platform_device *pdev,
 	return 0;
 }
 
+static int tfa_pin_init(struct pinctrl *pinctrl)
+{
+       struct pinctrl_state *set_state;
+       int retval;
+
+       set_state = pinctrl_lookup_state(pinctrl, "tfa_gpio_init");
+       if (IS_ERR(set_state)) {
+               pr_err("cannot get tfa_gpio_init pinctrl state\n");
+               return PTR_ERR(set_state);
+       }
+
+       retval = pinctrl_select_state(pinctrl, set_state);
+       if (retval) {
+               pr_err("cannot set tfa_gpio_init pinctrl gpio state\n");
+               return retval;
+       }
+       pr_info("tfa init done\n");
+       return 0;
+}
+
+static int tfa_dt_parser(struct platform_device *pdev){
+	int ret = 0;
+	struct pinctrl *tfa_gpio_pinctrl = NULL;
+	pr_debug("%s: start parser\n", __func__);
+
+	tfa_gpio_pinctrl = devm_pinctrl_get(&pdev->dev);
+	if (IS_ERR(tfa_gpio_pinctrl)) {
+			pr_err("%s: Target does not have pinctrl\n", __func__);
+	}
+
+	if (tfa_gpio_pinctrl) {
+		ret = tfa_pin_init(tfa_gpio_pinctrl);
+		if (ret) {
+			pr_err("%s: tfa gpios init fail, ret=%d\n", __func__, ret);
+		}
+	}
+
+	pr_debug("%s: parse end\n", __func__);
+
+	return 0;
+}
+
+#ifdef CONFIG_USE_CODEC_MBHC
+static int headset_pin_init(struct pinctrl *pinctrl)
+{
+       struct pinctrl_state *set_state;
+       int retval;
+
+       set_state = pinctrl_lookup_state(pinctrl, "headset_gpio_init");
+       if (IS_ERR(set_state)) {
+               pr_err("cannot get headset_gpio_init pinctrl state\n");
+               return PTR_ERR(set_state);
+       }
+
+       retval = pinctrl_select_state(pinctrl, set_state);
+       if (retval) {
+               pr_err("cannot set headset_gpio_init pinctrl gpio state\n");
+               return retval;
+       }
+       pr_info("headset init done\n");
+       return 0;
+}
+
+static int headset_dt_parser(struct platform_device *pdev, struct wcd9xxx_mbhc_config *wcd_mbhc_cfg){
+	int i = 0;
+	int id_gpio_count = 0;
+	int switch_gpio_count = 0;
+	uint32_t min_max_array[2]; //[0] : min [1] :max
+	const char *id_gpio_name = "htc,aud_gpio_ids";
+	const char *switch_gpio_name = "htc,aud_gpio_switches";
+	const char *hsmic_bias_string = "htc,hsmic_2v85_en";
+	const char *adapter_35mm_string = "htc,adapter_35mm_threshold";
+	const char *adapter_25mm_string = "htc,adapter_25mm_threshold";
+	const char *adc_channel_string = "htc,headset_adc_channel";
+	const char *name;
+
+	int ret = 0;
+	struct pinctrl *headset_gpio_pinctrl = NULL;
+	pr_debug("%s: start parser\n", __func__);
+
+	id_gpio_count = of_property_count_strings(pdev->dev.of_node, id_gpio_name);
+	switch_gpio_count = of_property_count_strings(pdev->dev.of_node, switch_gpio_name);
+	if (IS_ERR_VALUE(id_gpio_count) && IS_ERR_VALUE(switch_gpio_count)) {
+		pr_err("%s: Failed to get %s = %d, %s = %d\n", __func__,
+			id_gpio_name, id_gpio_count,
+			switch_gpio_name, switch_gpio_count);
+		return -EINVAL;
+	}
+
+	if (id_gpio_count != TYPEC_ID_MAX) {
+		id_gpio_count = TYPEC_ID_MAX;
+		pr_err("%s: id_gpio_count incorrect, please check dts config", __func__);
+		return -EINVAL;
+	}
+
+	if (switch_gpio_count != HEADSET_SWITCH_MAX) {
+		switch_gpio_count = TYPEC_ID_MAX;
+		pr_err("%s: id_gpio_count incorrect, please check dts config", __func__);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < id_gpio_count; i++){
+		ret = of_property_read_string_index(pdev->dev.of_node, id_gpio_name, i, &name);
+		if (ret) {
+			pr_err("%s: of read string %s index %d error %d\n",
+				__func__, id_gpio_name, i, ret);
+			return ret;
+		}
+
+		wcd_mbhc_cfg->htc_headset_cfg.id_gpio[i] = of_get_named_gpio(pdev->dev.of_node,
+			name, 0);
+		if (gpio_is_valid(wcd_mbhc_cfg->htc_headset_cfg.id_gpio[i])) {
+			pr_info("%s: gpio %s parse success gpio no %d\n", __func__,
+				name, wcd_mbhc_cfg->htc_headset_cfg.id_gpio[i]);
+			ret = gpio_request_one(wcd_mbhc_cfg->htc_headset_cfg.id_gpio[i],
+				GPIOF_DIR_IN, name);
+			if (ret) {
+				pr_err("%s: gpio %s request failed with err %d\n", __func__,
+					name, ret);
+				return ret;
+			}
+		} else {
+			pr_err("%s: gpio %s parse fail\n", __func__, name);
+			return -EINVAL;
+		}
+	}
+
+	for (i = 0; i < switch_gpio_count; i++){
+		ret = of_property_read_string_index(pdev->dev.of_node, switch_gpio_name, i, &name);
+		if (ret) {
+			pr_err("%s: of read string %s index %d error %d\n",
+				__func__, switch_gpio_name, i, ret);
+			return ret;
+		}
+		wcd_mbhc_cfg->htc_headset_cfg.switch_gpio[i] = of_get_named_gpio(pdev->dev.of_node,
+			name, 0);
+		if (gpio_is_valid(wcd_mbhc_cfg->htc_headset_cfg.switch_gpio[i])) {
+			pr_info("%s: gpio %s parse success gpio no %d\n", __func__,
+				name, wcd_mbhc_cfg->htc_headset_cfg.switch_gpio[i]);
+			ret = gpio_request_one(wcd_mbhc_cfg->htc_headset_cfg.switch_gpio[i],
+				GPIOF_OUT_INIT_LOW, name);
+			if (ret) {
+				pr_err("%s: gpio %s request failed with err %d\n", __func__,
+					name, ret);
+				return ret;
+			}
+		} else {
+			pr_err("%s: gpio %s parse fail\n", __func__, name);
+			return -EINVAL;
+		}
+	}
+
+	wcd_mbhc_cfg->htc_headset_cfg.ext_micbias = of_get_named_gpio(pdev->dev.of_node,
+		hsmic_bias_string, 0);
+	if (gpio_is_valid(wcd_mbhc_cfg->htc_headset_cfg.ext_micbias)) {
+		pr_info("%s: gpio %s parse success gpio no %d\n", __func__,
+			hsmic_bias_string,
+			wcd_mbhc_cfg->htc_headset_cfg.ext_micbias);
+		ret = gpio_request_one(wcd_mbhc_cfg->htc_headset_cfg.ext_micbias,
+			GPIOF_OUT_INIT_LOW, hsmic_bias_string);
+		if (ret) {
+			pr_err("%s: gpio %s request failed with err %d\n", __func__,
+				hsmic_bias_string, ret);
+			return ret;
+		}
+	} else {
+		pr_err("%s: gpio %s parse fail\n", __func__,
+			hsmic_bias_string);
+		return -EINVAL;
+	}
+
+	headset_gpio_pinctrl = devm_pinctrl_get(&pdev->dev);
+	if (IS_ERR(headset_gpio_pinctrl)) {
+			pr_err("%s: Target does not have pinctrl\n", __func__);
+	}
+
+	if (headset_gpio_pinctrl) {
+		ret = headset_pin_init(headset_gpio_pinctrl);
+		if (ret) {
+			pr_err("%s: headset gpios init fail, ret=%d\n", __func__, ret);
+		}
+	}
+
+	ret = of_property_read_u32_array(pdev->dev.of_node,
+			adapter_35mm_string,
+			min_max_array, 2);
+
+	if (ret < 0) {
+			pr_err("%s: adapter_35mm_string parser err\n", __func__);
+		} else {
+			wcd_mbhc_cfg->htc_headset_cfg.adc_35mm_min = min_max_array[0];
+			wcd_mbhc_cfg->htc_headset_cfg.adc_35mm_max = min_max_array[1];
+			pr_info("%s: adapter_35mm_string  min: = %d max: = %d", __func__, wcd_mbhc_cfg->htc_headset_cfg.adc_35mm_min , wcd_mbhc_cfg->htc_headset_cfg.adc_35mm_max);
+		}
+
+
+	ret = of_property_read_u32_array(pdev->dev.of_node,
+			adapter_25mm_string,
+			min_max_array, 2);
+
+	if (ret < 0) {
+			pr_err("%s: adapter_25mm_string parser err\n", __func__);
+		} else {
+			wcd_mbhc_cfg->htc_headset_cfg.adc_25mm_min = min_max_array[0];
+			wcd_mbhc_cfg->htc_headset_cfg.adc_25mm_max = min_max_array[1];
+			pr_info("%s: adapter_25mm_string  min: = %d max: = %d", __func__, wcd_mbhc_cfg->htc_headset_cfg.adc_25mm_min , wcd_mbhc_cfg->htc_headset_cfg.adc_25mm_max);
+		}
+
+	ret = of_property_read_u32(pdev->dev.of_node, adc_channel_string, &wcd_mbhc_cfg->htc_headset_cfg.adc_channel);
+	if (ret < 0) {
+		pr_err("%s: adc channel parser err\n", __func__);
+	} else
+		pr_info("%s: adc_channel = %d", __func__, wcd_mbhc_cfg->htc_headset_cfg.adc_channel);
+
+	wcd_mbhc_cfg->htc_headset_cfg.IsXaMotherboard = of_property_read_bool(pdev->dev.of_node, "acadia-xa");
+	wcd_mbhc_cfg->htc_headset_cfg.get_adc_value = hs_qpnp_remote_adc;
+	wcd_mbhc_cfg->htc_headset_cfg.htc_headset_init = true;
+
+	pr_debug("%s: parse end\n", __func__);
+
+	return 0;
+}
+#endif
+//htc audio --
+
 static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &snd_soc_card_msm8994;
 	struct msm8994_asoc_mach_data *pdata;
-#ifdef USE_CODEC_MBHC
+#ifdef CONFIG_USE_CODEC_MBHC //htc_audio
 	const char *mbhc_audio_jack_type = NULL;
 #endif
-	int ret;
+	int ret, i; //HTC_AUD
 	pr_info("%s:++\n",__func__);
+//htc audio ++
 	mutex_init(&htc_audiosphere_enable_mutex);
 	mutex_init(&htc_audiosphere_strength_mutex);
+//htc audio --
+
 
 	if (!pdev->dev.of_node) {
 		dev_err(&pdev->dev, "No platform supplied from device tree\n");
@@ -5071,7 +5442,10 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 		ret = -EINVAL;
 		goto err;
 	}
+//htc audio ++
+//enable haset mic bias for bring up
 #if MSM8994_BRINGUP
+//Enable LED_3V3
 	pdata->led_gpio = of_get_named_gpio(pdev->dev.of_node,
 				"qcom,led_gpio", 0);
 	pr_info("%s: pdata->hset-bias-gpio %d\n",__func__,pdata->led_gpio);
@@ -5108,15 +5482,21 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 			"qcom, hph_en_gpio", pdev->dev.of_node->full_name,
 			pdata->hph_en_gpio);
 	} else {
-		
+		//Enable hph en gpio, otherwise AKM will hold I2C bus then cause I2C bus error
 		ret = msm8994_enable_hph(card);
 		if (ret)
 			pr_err("%s: set pdata->hph_en_gpio %d failed\n",__func__,pdata->hph_en_gpio);
 	}
 	hph_en_ready = 1;
 #endif
+//htc_audio ++
+#ifdef CONFIG_USE_CODEC_MBHC
+	if(!mbhc_cfg.htc_headset_cfg.htc_headset_init)
+	headset_dt_parser(pdev, &mbhc_cfg);
+#endif
 
-
+       tfa_dt_parser(pdev);
+//htc_audio --
 	pdata->mclk_gpio = of_get_named_gpio(pdev->dev.of_node,
 				"qcom,cdc-mclk-gpios", 0);
 	if (pdata->mclk_gpio < 0) {
@@ -5134,9 +5514,19 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 			ret);
 		goto err;
 	}
-#ifdef USE_CODEC_MBHC
+//htc audio ++
+#ifdef CONFIG_USE_CODEC_MBHC
 	mbhc_cfg.mclk_rate = pdata->mclk_freq;
 #endif
+	if (of_property_read_bool(pdev->dev.of_node, "acadia-tfa9891-support")) {
+		for (i = 0; i< ARRAY_SIZE(msm8994_common_dai_links); i++) {
+			if (!strncmp(msm8994_common_dai_links[i].name, LPASS_BE_QUAT_MI2S_RX, sizeof(LPASS_BE_QUAT_MI2S_RX))) {
+				msm8994_common_dai_links[i].codec_name = "tfa98xx.24-0034"; // tfa98xx.24-0034; 24 = i2c-bus number in decimal
+				msm8994_common_dai_links[i].codec_dai_name = "tfa98xx-aif-18-34"; // tfa98xx-aif-18-34; 18 = i2c-bus number in hexadecimal
+			}
+		}
+	}
+//htc audio --
 	if (of_property_read_bool(pdev->dev.of_node, "qcom,hdmi-audio-rx")) {
 		dev_info(&pdev->dev, "%s: hdmi audio support present\n",
 				__func__);
@@ -5173,7 +5563,7 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 			ret);
 		goto err;
 	}
-#ifdef USE_CODEC_MBHC
+#ifdef CONFIG_USE_CODEC_MBHC //htc_audio
 	ret = of_property_read_string(pdev->dev.of_node,
 		"qcom,mbhc-audio-jack-type", &mbhc_audio_jack_type);
 	if (ret) {
@@ -5203,6 +5593,10 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 		}
 	}
 #endif
+	/* Parse US-Euro gpio info from DT. Report no error if us-euro
+	 * entry is not found in DT file as some targets do not support
+	 * US-Euro detection
+	 */
 	pdata->us_euro_gpio = of_get_named_gpio(pdev->dev.of_node,
 				"qcom,us-euro-gpios", 0);
 	if (pdata->us_euro_gpio < 0) {
@@ -5212,15 +5606,17 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 	} else {
 		dev_dbg(&pdev->dev, "%s detected %d",
 			"qcom,us-euro-gpios", pdata->us_euro_gpio);
-#ifdef USE_CODEC_MBHC
+#ifdef CONFIG_USE_CODEC_MBHC //htc_audio
 		mbhc_cfg.swap_gnd_mic = msm8994_swap_gnd_mic;
 #endif
 	}
-
+//htc audio ++
+#ifndef CONFIG_USE_CODEC_MBHC
 	ret = msm8994_prepare_us_euro(card);
 	if (ret)
 		dev_info(&pdev->dev, "msm8994_prepare_us_euro failed (%d)\n",
 			ret);
+#endif
 	mutex_init(&htc_amp_mutex);
 
 	msm8994_dtparse_rcv(pdev, &htc_rcv_config);
@@ -5235,7 +5631,8 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 		pr_warn("%s: init ftm btpcm failed with %d (Non-issue for non-BRCM BT chip.)", __func__, ret);
 	}
 
-	
+//htc audio --
+	/* Parse pinctrl info for AUXPCM, if defined */
 	ret = msm_auxpcm_get_pinctrl(pdev, SEC_MI2S_PCM);
 	if (!ret) {
 		pr_debug("%s: Auxpcm pinctrl parsing successful\n", __func__);
@@ -5246,6 +5643,7 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 		goto err;
 	}
 
+//htc audio ++
 	atomic_set(&tert_mi2s_rsc_ref, 0);
 	atomic_set(&quat_mi2s_rsc_ref, 0);
 
@@ -5256,7 +5654,7 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 	}
 
 #if 0
-	
+	/* Parse pinctrl info for MI2S ports, if defined */
 	ret = msm_mi2s_get_pinctrl(pdev, PRI_MI2S_PCM);
 	if (!ret) pr_debug("%s: Primary MI2S pinctrl parsing successful\n", __func__);
 	if(ret) {
@@ -5285,18 +5683,21 @@ static int msm8994_asoc_machine_probe(struct platform_device *pdev)
 	if (ret) {
 		pr_err("%s: DB8094 init ext devices stat IRQ failed (%d)\n",
 				__func__, ret);
-		goto err; 
+		goto err; // htc audio
 	}
 
+//htc audio ++
 	msm8994_dtparse_and_config_reserved_gpio(pdev);
 
 	if (htc_aud_btpcm_config.init == 1) {
 		aud_ftm_btpcm_func.user_data = (void *)pdev;
 		aud_ftm_func_register(&aud_ftm_btpcm_func);
 	}
+//htc audio --
 
 	return 0;
 
+//htc audio ++
 #if 0
 err3:
 	msm_mi2s_release_pinctrl(pdev, TERT_MI2S_PCM);
@@ -5305,7 +5706,10 @@ err2:
 err1:
 	msm_auxpcm_release_pinctrl(pdev, SEC_MI2S_PCM);
 #endif
+//htc audio --
 err:
+//htc audio ++
+//enable hset bias for bring up
 #if MSM8994_BRINGUP
 	if (pdata->hset_bias_gpio > 0) {
 		dev_dbg(&pdev->dev, "%s free gpio %d\n",
@@ -5321,6 +5725,7 @@ err:
 		pdata->led_gpio = 0;
 	}
 #endif
+//htc audio --
 	if (pdata->mclk_gpio > 0) {
 		dev_dbg(&pdev->dev, "%s free gpio %d\n",
 			__func__, pdata->mclk_gpio);
@@ -5347,8 +5752,8 @@ static int msm8994_asoc_machine_remove(struct platform_device *pdev)
 
 	gpio_free(pdata->mclk_gpio);
 #if MSM8994_BRINGUP
-	gpio_free(pdata->hset_bias_gpio); 
-	gpio_free(pdata->led_gpio); 
+	gpio_free(pdata->hset_bias_gpio); //htc audio, enable hset bias for bring up
+	gpio_free(pdata->led_gpio); //htc audio, enable led 3v3 for bring up
 #endif
 	gpio_free(pdata->us_euro_gpio);
 
@@ -5359,11 +5764,13 @@ static int msm8994_asoc_machine_remove(struct platform_device *pdev)
 	msm8994_audio_plug_device_remove(apq8094_db_ext_fp_out_dev);
 
 	msm_auxpcm_release_pinctrl(pdev, SEC_MI2S_PCM);
+//htc audio ++
 #if 0
 	msm_mi2s_release_pinctrl(pdev, PRI_MI2S_PCM);
 	msm_mi2s_release_pinctrl(pdev, TERT_MI2S_PCM);
 	msm_mi2s_release_pinctrl(pdev, QUAT_MI2S_PCM);
 #endif
+//htc audio --
 	snd_soc_unregister_card(card);
 
 	return 0;
@@ -5384,6 +5791,7 @@ static struct platform_driver msm8994_asoc_machine_driver = {
 	.probe = msm8994_asoc_machine_probe,
 	.remove = msm8994_asoc_machine_remove,
 };
+//htc audio ++
 static const struct of_device_id msm_aud_pinctrl_dev_dt_match[] = {
 	{ .compatible = "aud_pinctrl_dev", },
 	{ }
@@ -5419,7 +5827,7 @@ static int msm_aud_pinctrl_dev_probe(struct platform_device *pdev)
 			ret = msm_mi2s_get_pinctrl(to_platform_device(pdev->dev.parent), pdev, dev_id);
 			break;
 		case AUXPCM_PIN_TYPE:
-			
+			//msm_auxpcm_get_pinctrl(to_platform_device(pdev->dev.parent), pdev, dev_id);
 			break;
 		case WCD_PIN_TYPE:
 			msm_wcd_get_pinctrl(to_platform_device(pdev->dev.parent), pdev, dev_id);
@@ -5464,7 +5872,7 @@ static int msm_aud_pinctrl_dev_remove(struct platform_device *pdev)
 			break;
 
 		case AUXPCM_PIN_TYPE:
-			
+			//msm_auxpcm_release_pinctrl(to_platform_device(pdev->dev.parent), dev_id);
 			break;
 
 		case WCD_PIN_TYPE:
@@ -5486,13 +5894,16 @@ static struct platform_driver msm_aud_pinctrl_dev = {
 	},
 };
 
+//module_platform_driver(msm8994_asoc_machine_driver);
 static int __init msm8994_audio_init(void)
 {
         int ret = 0;
 
 	htc_acoustic_register_ops(&acoustic);
 	platform_driver_register(&msm8994_asoc_machine_driver);
+//htc audio ++
 	platform_driver_register(&msm_aud_pinctrl_dev);
+//htc audio --
 	return ret;
 
 }
@@ -5501,10 +5912,13 @@ late_initcall(msm8994_audio_init);
 static void __exit msm8994_audio_exit(void)
 {
 	pr_info("%s", __func__);
+//htc audio ++
 	platform_driver_unregister(&msm_aud_pinctrl_dev);
+//htc audio --
 	platform_driver_unregister(&msm8994_asoc_machine_driver);
 }
 module_exit(msm8994_audio_exit);
+//htc audio --
 MODULE_DESCRIPTION("ALSA SoC msm");
 MODULE_LICENSE("GPL v2");
 MODULE_ALIAS("platform:" DRV_NAME);

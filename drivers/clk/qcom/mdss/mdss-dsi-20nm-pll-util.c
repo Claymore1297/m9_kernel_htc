@@ -221,6 +221,10 @@ static void pll_20nm_override_trim_codes(struct mdss_pll_resources *dsi_pll_res)
 	u32 reg_data;
 	void __iomem *pll_base = dsi_pll_res->pll_base;
 
+	/*
+	 * Override mux config for all cached trim codes from
+	 * saved config except for VCO Tune
+	 */
 	reg_data = (dsi_pll_res->cache_pll_trim_codes[0] & 0x3f) | BIT(5);
 	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_KVCO_CODE, reg_data);
 
@@ -270,7 +274,7 @@ int set_shadow_bypass_lp_div_mux_sel(struct mux_clk *clk, int sel)
 
 	pr_debug("%d: reg_data = %x\n", __LINE__, reg_data);
 
-	
+	/* Repeat POST DIVIDER 2 times (4 writes)*/
 	for (rem = 0; rem < 2; rem++)
 		MDSS_DYN_PLL_REG_W(dsi_pll_res->dyn_pll_base,
 			MMSS_DSI_DYNAMIC_REFRESH_PLL_CTRL16 + (4 * rem),
@@ -500,7 +504,7 @@ static bool pll_20nm_is_pll_locked(struct mdss_pll_resources *dsi_pll_res)
 	u32 status;
 	bool pll_locked;
 
-	
+	/* poll for PLL ready status */
 	if (readl_poll_timeout_noirq((dsi_pll_res->pll_base +
 			MMSS_DSI_PHY_PLL_RESET_SM),
 			status,
@@ -550,7 +554,7 @@ static int dsi_pll_enable(struct clk *c)
 		return rc;
 	}
 
-	
+	/* Try all enable sequences until one succeeds */
 	for (i = 0; i < vco->pll_en_seq_cnt; i++) {
 		rc = vco->pll_enable_seqs[i](dsi_pll_res);
 		pr_debug("DSI PLL %s after sequence #%d\n",
@@ -558,7 +562,7 @@ static int dsi_pll_enable(struct clk *c)
 		if (!rc)
 			break;
 	}
-	
+	/* Disable PLL1 to avoid current leakage while toggling MDSS GDSC */
 	if (dsi_pll_res->pll_1_base)
 		pll_20nm_config_powerdown(dsi_pll_res->pll_1_base);
 
@@ -584,7 +588,7 @@ static void dsi_pll_disable(struct clk *c)
 
 	dsi_pll_res->handoff_resources = false;
 
-	
+	/* Disable PLL1 to avoid current leakage while toggling MDSS GDSC */
 	if (dsi_pll_res->pll_1_base)
 		pll_20nm_config_powerdown(dsi_pll_res->pll_1_base);
 
@@ -691,7 +695,7 @@ static void pll_20nm_vco_rate_calc(struct mdss_pll_vco_calc *vco_calc,
 			pll_plllock_cmp1, pll_plllock_cmp2);
 	pr_debug("pll_plllock_cmp3 = 0x%llx\n",	pll_plllock_cmp3);
 
-	
+	/* Assign to vco struct */
 	vco_calc->div_frac_start1 = div_frac_start1;
 	vco_calc->div_frac_start2 = div_frac_start2;
 	vco_calc->div_frac_start3 = div_frac_start3;
@@ -755,7 +759,7 @@ int shadow_pll_20nm_vco_set_rate(struct dsi_pll_vco_clk *vco,
 		return -EINVAL;
 	}
 
-	
+	/* div fraction, start and comp calculations */
 	pll_20nm_vco_rate_calc(&vco_calc, vco_clk_rate,
 			dsi_pll_res->vco_ref_clk_rate,
 			dsi_pll_res->pll_en_90_phase);
@@ -809,7 +813,7 @@ int shadow_pll_20nm_vco_set_rate(struct dsi_pll_vco_clk *vco,
 		((dsi_pll_res->cache_pll_trim_codes[0] & 0x3f) | BIT(5)),
 		((dsi_pll_res->cache_pll_trim_codes[1] & 0x7f) | BIT(7)));
 
-	
+	/* fill other dfps registers with resetsm_ctrl3 = 0x2 */
 	for (rem = MMSS_DSI_DYNAMIC_REFRESH_PLL_CTRL10; rem <=
 		     MMSS_DSI_DYNAMIC_REFRESH_PLL_CTRL14; rem += 4)
 		MDSS_DYN_PLL_REG_W(dsi_pll_res->dyn_pll_base, rem,
@@ -1039,6 +1043,11 @@ int pll_20nm_vco_enable_seq(struct mdss_pll_resources *dsi_pll_res)
 	pr_debug("init lock=%d prev vco_rate=%llu, new vco_rate=%llu\n",
 		dsi_pll_res->is_init_locked, dsi_pll_res->vco_locking_rate,
 		dsi_pll_res->vco_current_rate);
+	/*
+	 * Run auto-lock sequence if it is either bootup initial
+	 * locking or when the vco rate is changed. Otherwise, just
+	 * use stored codes and bypass caliberation.
+	 */
 	if (!dsi_pll_res->is_init_locked || (dsi_pll_res->vco_locking_rate !=
 			dsi_pll_res->vco_current_rate)) {
 		rc = pll_20nm_vco_init_lock(dsi_pll_res);
